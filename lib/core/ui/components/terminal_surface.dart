@@ -1,0 +1,272 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+import '../../../app/theme/app_theme.dart';
+import '../../backend/runtime_models.dart';
+import '../../motion/app_motion.dart';
+import '../design_tokens.dart';
+
+class TerminalSurface extends StatelessWidget {
+  const TerminalSurface({
+    required this.logs,
+    required this.scrollController,
+    required this.autoScrollEnabled,
+    required this.onClear,
+    required this.onCopy,
+    required this.onToggleAutoScroll,
+    super.key,
+  });
+
+  final List<RuntimeLogEntry> logs;
+  final ScrollController scrollController;
+  final bool autoScrollEnabled;
+  final VoidCallback onClear;
+  final VoidCallback onCopy;
+  final VoidCallback onToggleAutoScroll;
+
+  @override
+  Widget build(BuildContext context) {
+    final extras = context.appThemeExtras;
+    final theme = Theme.of(context);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: extras.terminalSurface,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: extras.terminalStroke),
+        boxShadow: AppElevations.card,
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.sm,
+            ),
+            child: Row(
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: extras.terminalBadgeSurface,
+                    borderRadius: BorderRadius.circular(AppRadii.pill),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Text(
+                      '${logs.length} строк',
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: extras.terminalText,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                AnimatedSwitcher(
+                  duration: AppMotionDurations.fast,
+                  child: Text(
+                    autoScrollEnabled ? 'Автопрокрутка' : 'Пауза',
+                    key: ValueKey(autoScrollEnabled),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: autoScrollEnabled
+                          ? extras.success
+                          : extras.warning,
+                    ),
+                  ),
+                ),
+                const Spacer(),
+                _TerminalActionButton(
+                  tooltip: autoScrollEnabled
+                      ? 'Пауза автопрокрутки'
+                      : 'Возобновить автопрокрутку',
+                  icon: autoScrollEnabled
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  onTap: onToggleAutoScroll,
+                ),
+                const SizedBox(width: 8),
+                _TerminalActionButton(
+                  tooltip: 'Копировать',
+                  icon: Icons.copy_all_rounded,
+                  onTap: onCopy,
+                ),
+                const SizedBox(width: 8),
+                _TerminalActionButton(
+                  tooltip: 'Очистить',
+                  icon: Icons.cleaning_services_rounded,
+                  onTap: onClear,
+                ),
+              ],
+            ),
+          ),
+          Divider(
+            height: 1,
+            color: extras.terminalStroke.withValues(alpha: 0.6),
+          ),
+          Expanded(
+            child: logs.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(AppSpacing.xl),
+                      child: Text(
+                        'Логи появятся после первого запуска.',
+                        style: GoogleFonts.ibmPlexMono(
+                          color: extras.terminalMutedText,
+                          fontSize: 13,
+                          height: 1.55,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  )
+                : SelectionArea(
+                    child: Scrollbar(
+                      controller: scrollController,
+                      thumbVisibility: true,
+                      child: ListView.separated(
+                        controller: scrollController,
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        itemCount: logs.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
+                        itemBuilder: (context, index) {
+                          return _AnimatedLogLine(entry: logs[index]);
+                        },
+                      ),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AnimatedLogLine extends StatefulWidget {
+  const _AnimatedLogLine({required this.entry});
+
+  final RuntimeLogEntry entry;
+
+  @override
+  State<_AnimatedLogLine> createState() => _AnimatedLogLineState();
+}
+
+class _AnimatedLogLineState extends State<_AnimatedLogLine>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: AppMotionDurations.standard,
+  )..forward();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final extras = context.appThemeExtras;
+    final levelColor = switch (widget.entry.level) {
+      RuntimeLogLevel.system => extras.terminalMutedText,
+      RuntimeLogLevel.info => theme.colorScheme.secondary,
+      RuntimeLogLevel.success => extras.success,
+      RuntimeLogLevel.warning => extras.warning,
+      RuntimeLogLevel.error => extras.danger,
+    };
+
+    final animation = CurvedAnimation(
+      parent: _controller,
+      curve: AppMotionCurves.decelerate,
+    );
+    final timestamp = _formatTime(widget.entry.timestamp);
+    final serviceLabel = widget.entry.serviceType?.shortTitle ?? 'Система';
+
+    return FadeTransition(
+      opacity: animation,
+      child: SlideTransition(
+        position: Tween<Offset>(
+          begin: const Offset(0, 0.08),
+          end: Offset.zero,
+        ).animate(animation),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: extras.terminalLineSurface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: levelColor.withValues(alpha: 0.24)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: RichText(
+              text: TextSpan(
+                style: GoogleFonts.ibmPlexMono(
+                  fontSize: 12.8,
+                  height: 1.48,
+                  color: extras.terminalText,
+                ),
+                children: [
+                  TextSpan(
+                    text: '[$timestamp] ',
+                    style: TextStyle(color: extras.terminalMutedText),
+                  ),
+                  TextSpan(
+                    text: '[$serviceLabel] ',
+                    style: TextStyle(
+                      color: levelColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  TextSpan(text: widget.entry.message),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _formatTime(DateTime value) {
+    final hh = value.hour.toString().padLeft(2, '0');
+    final mm = value.minute.toString().padLeft(2, '0');
+    final ss = value.second.toString().padLeft(2, '0');
+    return '$hh:$mm:$ss';
+  }
+}
+
+class _TerminalActionButton extends StatelessWidget {
+  const _TerminalActionButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final extras = context.appThemeExtras;
+
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: extras.terminalBadgeSurface,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Icon(icon, size: 18, color: extras.terminalText),
+          ),
+        ),
+      ),
+    );
+  }
+}

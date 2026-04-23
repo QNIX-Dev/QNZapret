@@ -1,0 +1,254 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/motion/app_motion.dart';
+import '../../core/state/app_settings_controller.dart';
+import '../../core/ui/app_backdrop.dart';
+import '../../core/ui/design_tokens.dart';
+import '../../features/home/presentation/home_screen.dart';
+import '../../features/logs/presentation/logs_screen.dart';
+import '../../features/settings/presentation/settings_screen.dart';
+import '../routing/app_destination.dart';
+import 'floating_navigation_bar.dart';
+
+class AppShell extends ConsumerStatefulWidget {
+  const AppShell({super.key});
+
+  @override
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> {
+  late final PageController _pageController;
+  late AppDestination _activeDestination;
+  late final Map<AppDestination, int> _visitTokens;
+  AppDestination? _pendingDestination;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialDestination = ref
+        .read(appSettingsControllerProvider)
+        .destination;
+    _activeDestination = initialDestination;
+    _pageController = PageController(initialPage: initialDestination.index);
+    _visitTokens = {
+      for (final destination in AppDestination.values)
+        destination: destination == initialDestination ? 1 : 0,
+    };
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = ref.watch(appSettingsControllerProvider);
+    _syncDestination(settings.destination);
+
+    return Scaffold(
+      extendBody: true,
+      backgroundColor: Colors.transparent,
+      body: AppBackdrop(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final pagePadding = AppBreakpoints.pagePadding(
+              constraints.maxWidth,
+            );
+
+            return Stack(
+              children: [
+                SafeArea(
+                  minimum: EdgeInsets.fromLTRB(
+                    pagePadding,
+                    pagePadding,
+                    pagePadding,
+                    104,
+                  ),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: AppBreakpoints.contentMaxWidth,
+                      ),
+                      child: ClipRect(
+                        child: PageView(
+                          controller: _pageController,
+                          physics: const NeverScrollableScrollPhysics(),
+                          children: [
+                            _SharedAxisPage(
+                              controller: _pageController,
+                              index: AppDestination.home.index,
+                              child: HomeScreen(
+                                onOpenSettings: () => _openSettings(context),
+                              ),
+                            ),
+                            _SharedAxisPage(
+                              controller: _pageController,
+                              index: AppDestination.logs.index,
+                              child: LogsScreen(
+                                onOpenSettings: () => _openSettings(context),
+                                visitToken:
+                                    _visitTokens[AppDestination.logs] ?? 0,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 18,
+                  child: SafeArea(
+                    top: false,
+                    child: Center(
+                      child: FloatingNavigationBar(
+                        destination: settings.destination,
+                        onSelect: (destination) {
+                          HapticFeedback.selectionClick();
+                          ref
+                              .read(appSettingsControllerProvider.notifier)
+                              .setDestination(destination);
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  void _syncDestination(AppDestination destination) {
+    if (destination == _activeDestination ||
+        destination == _pendingDestination) {
+      return;
+    }
+
+    _pendingDestination = destination;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final target = _pendingDestination;
+      _pendingDestination = null;
+      if (!mounted || target == null || target == _activeDestination) {
+        return;
+      }
+
+      setState(() {
+        _activeDestination = target;
+        _visitTokens[target] = (_visitTokens[target] ?? 0) + 1;
+      });
+
+      if (!_pageController.hasClients) {
+        return;
+      }
+
+      await _pageController.animateToPage(
+        target.index,
+        duration: AppMotionDurations.page,
+        curve: AppMotionCurves.decelerate,
+      );
+    });
+  }
+
+  Future<void> _openSettings(BuildContext context) {
+    final width = MediaQuery.sizeOf(context).width;
+    final route = AppBreakpoints.useSettingsPage(width)
+        ? MaterialPageRoute<void>(
+            builder: (context) => const SettingsScreen(
+              presentation: SettingsScreenPresentation.page,
+            ),
+            fullscreenDialog: true,
+          )
+        : _settingsDialogRoute();
+
+    return Navigator.of(context).push(route);
+  }
+
+  Route<void> _settingsDialogRoute() {
+    return PageRouteBuilder<void>(
+      opaque: false,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.36),
+      pageBuilder: (context, animation, secondaryAnimation) {
+        return const SettingsScreen(
+          presentation: SettingsScreenPresentation.dialog,
+        );
+      },
+      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        final curved = CurvedAnimation(
+          parent: animation,
+          curve: AppMotionCurves.decelerate,
+          reverseCurve: AppMotionCurves.accelerate,
+        );
+
+        return FadeTransition(
+          opacity: curved,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.98, end: 1).animate(curved),
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 0.03),
+                end: Offset.zero,
+              ).animate(curved),
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SharedAxisPage extends StatelessWidget {
+  const _SharedAxisPage({
+    required this.controller,
+    required this.index,
+    required this.child,
+  });
+
+  final PageController controller;
+  final int index;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      child: child,
+      builder: (context, child) {
+        var page = index.toDouble();
+        if (controller.hasClients && controller.position.hasContentDimensions) {
+          page = controller.page ?? page;
+        }
+
+        final distance = (page - index).clamp(-1.0, 1.0);
+        final t = distance.abs();
+        final direction = distance.sign;
+        final opacity = (1 - t * 0.32).clamp(0.0, 1.0);
+        final scale = 1 - t * 0.035;
+
+        return Opacity(
+          opacity: opacity,
+          child: Transform.translate(
+            offset: Offset(direction * 18 * t, 0),
+            child: Transform.scale(
+              scale: scale,
+              alignment: Alignment.center,
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
