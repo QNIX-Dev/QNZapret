@@ -8,17 +8,18 @@
 
 - сократить число расхождений между UI и runtime-реализацией
 - сделать handoff между frontend и backend предсказуемым
-- не ломать экранную логику при подключении реального Go backend
+- не ломать экранную логику при подключении реальной proxy-части на `tgwsproxy`
+- сохранять Android/Linux/Windows adapters за общей Dart-поверхностью
 
 ## Главный принцип
 
-Работа идёт по схеме `contract first`.
+Работа идет по схеме `contract first`.
 
 Порядок такой:
 
-1. Сначала согласуется bridge contract.
-2. Потом backend делает реализацию под него.
-3. Потом frontend переключает provider с `StubRuntimeBridge` на реальный bridge.
+1. Сначала уточняется `ProxyRuntime` contract.
+2. Потом backend/platform layer реализует его в adapter.
+3. Потом UI или composition root переключается со stub/runtime placeholder на реальную реализацию.
 4. Любое изменение lifecycle semantics сначала фиксируется в контракте, потом в коде.
 
 ## Роли
@@ -28,133 +29,153 @@
 Отвечает за:
 
 - UI/UX
-- theme, motion, navigation
+- theme
 - presentation layer
-- application/state layer
-- адаптацию доменных runtime-моделей в экранное поведение
+- адаптацию runtime snapshot в экранное поведение
 
 ### Backend
 
 Отвечает за:
 
-- запуск и остановку реальных сервисов
+- запуск и остановку реального runtime
 - platform-specific bridge implementation
-- поток runtime status
-- поток логов
-- поток ошибок
+- Android service lifecycle
+- runtime status
+- будущий поток логов
+- ошибки и recoverability semantics
 
 ### Совместная зона
 
 - `docs/runtime_bridge_contract.md`
-- `lib/core/backend/runtime_bridge.dart`
-- `lib/core/backend/runtime_models.dart`
+- `lib/core/backend/proxy_runtime.dart`
+- `lib/core/backend/android_proxy_runtime.dart`
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/ProxyRuntimeBridge.kt`
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnService.kt`
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnRuntimeStore.kt`
 
-Именно эти артефакты должны рассматриваться как shared contract surface.
+Именно эти артефакты должны рассматриваться как shared contract surface для текущей Android-интеграции.
 
 ## Практический цикл работы
 
 ### Этап 1. Согласование контракта
 
-Перед началом backend-интеграции нужно зафиксировать:
+Перед изменением backend-интеграции нужно зафиксировать:
 
-- какие методы bridge обязательны
-- какие статусы backend реально может гарантировать
-- какие ошибки и коды ошибок будут стабильными
-- как будет работать лог-стрим
+- какие методы `ProxyRuntime` обязательны
+- какие поля snapshot UI реально использует
+- какие состояния backend может гарантировать
+- какие native errors считаются публичными
+- как отличать service base от fully connected `tgwsproxy`
 
 Результат:
 
-- обновлённый `docs/runtime_bridge_contract.md`
-- при необходимости обновлённые `runtime_models.dart` и `runtime_bridge.dart`
+- обновленный `docs/runtime_bridge_contract.md`
+- при необходимости обновленный `proxy_runtime.dart`
+- при необходимости обновленный Android bridge/wire protocol
 
-### Этап 2. Backend делает адаптер
+### Этап 2. Backend делает adapter
 
-Backend-коллега реализует platform bridge так, чтобы наружу он соответствовал Dart-контракту.
+Backend реализует platform adapter так, чтобы наружу он соответствовал Dart-контракту.
 
 Важно:
 
-- platform-specific детали должны оставаться внутри адаптера
-- нельзя заставлять UI разбирать native payload вручную
+- platform-specific детали остаются внутри adapter
+- UI не должен разбирать native payload вручную
+- Android bridge должен возвращать payload, совместимый с `ProxyRuntimeSnapshot.fromMap`
+- ошибки должны иметь стабильные коды, если UI начинает на них опираться
 
-### Этап 3. Frontend переключает provider
+### Этап 3. Подключение в composition/UI
 
-Сейчас `runtimeBridgeProvider` отдаёт `StubRuntimeBridge`.
-Когда реальный bridge готов, меняется только composition root.
+Сейчас стартовый экран работает через `StubProxyRuntime`.
+Когда реальный Android lifecycle будет готов для продукта, подключение должно пройти через общий Dart API.
 
-Ожидаемая замена:
+Ожидаемый принцип:
 
-- сейчас: `StubRuntimeBridge()`
-- позже: Android/Linux/Windows bridge implementation
+- сейчас: `StubProxyRuntime(ProxyPlatform.android)`
+- позже: `AndroidProxyRuntime()`
 
-Если контракт не сломан, экраны `home`, `logs`, `settings` не должны потребовать большой переделки.
+Если контракт не сломан, экранный слой не должен знать Kotlin/Android details.
 
 ### Этап 4. Совместная проверка сценариев
 
-Минимальный набор сценариев для синхронной проверки:
+Минимальный набор сценариев для проверки Android-интеграции:
 
-- успешный старт обоих сервисов
-- частичный запуск
-- ошибка запуска одного сервиса
-- корректная остановка после полного запуска
-- корректная остановка после частичного запуска
-- живой поток логов во время работы
+- snapshot до выдачи VPN permission
+- успешный `prepare()`
+- отказ пользователя в VPN permission
+- повторный `prepare()`, когда permission уже выдан
+- `start(config)` без permission должен вернуть контролируемую ошибку
+- `start(config)` после permission должен поднять foreground service base
+- `getSnapshot()` после старта должен показать `running` и `serviceActive`
+- `stop()` после старта должен вернуть runtime в `idle`
+- revoke permission должен вернуть понятное состояние
 
 ## Правила изменения контракта
 
-Любое изменение в runtime contract считается заметным интеграционным изменением, если оно затрагивает:
+Любое изменение runtime contract считается заметным интеграционным изменением, если оно затрагивает:
 
-- сигнатуры методов bridge
-- набор статусов
-- semantics `CombinedRuntimeState`
-- поля `RuntimeFailure`
-- поля `RuntimeLogEntry`
+- сигнатуры методов `ProxyRuntime`
+- поля `ProxyPrepareResult`
+- поля `ProxyLaunchConfig`
+- поля `ProxyRuntimeSnapshot`
+- набор значений `ProxyRuntimeState`
+- Android MethodChannel name
+- имена native methods
+- форму payload для `prepare`, `getSnapshot`, `start`, `stop`
 
 Тогда нужно сделать сразу три вещи:
 
-1. Обновить код контракта.
+1. Обновить код контракта и adapters.
 2. Обновить `docs/runtime_bridge_contract.md`.
 3. Коротко зафиксировать impact на UI и backend в PR/описании изменений.
+
+Если изменение влияет на архитектуру, платформенный охват, структуру папок, зависимости или командные соглашения, нужно также обновить `AGENTS.md`.
 
 ## Что лучше не делать
 
 - не обсуждать контракт только устно
-- не менять значения статусов "по ходу" без фиксации
+- не менять wire payload "по ходу" без фиксации
 - не отдавать UI временные backend payloads "пока так"
 - не добавлять platform-specific логику в presentation layer
 - не расширять модели без понятного сценария использования
+- не считать `running` запущенным `tgwsproxy` без отдельной семантики
 
 ## Рекомендуемый handoff между коллегами
 
-Когда backend будет готов к первой интеграции, удобно передавать задачу в таком формате:
+Когда backend будет готов к следующей интеграции, удобно передавать задачу в таком формате.
 
 ### От frontend к backend
 
 - актуальный `runtime_bridge_contract.md`
-- список экранных ожиданий по lifecycle
-- список обязательных demo-сценариев
+- какие поля snapshot реально отображаются на экране
+- какие UI-сценарии должны быть устойчивыми
+- ограничения по тому, что нельзя менять в presentation layer
 
 ### От backend к frontend
 
-- статус готовности адаптера по платформам
-- список реально поддержанных сценариев
+- статус готовности adapter по платформам
+- список реально поддержанных lifecycle-сценариев
 - список известных ограничений
+- список native error codes
 - список временно неподдержанных возможностей
 
-## Recommended Definition of Done для первой реальной интеграции
+## Definition of Done для первой Android-интеграции
 
 Интеграция считается удачной, когда:
 
-- реальный bridge реализует текущий контракт
-- `runtimeBridgeProvider` может быть переключён на реальную реализацию
-- главный экран корректно проживает success flow
-- главный экран корректно проживает partial-failure flow
-- экран логов получает реальные записи
-- настройки и навигация продолжают работать без regressions
+- Android adapter реализует текущий `ProxyRuntime` contract
+- VPN permission flow стабильно проходит через `prepare()`
+- foreground service base стартует и останавливается через Dart API
+- `getSnapshot()` отражает реальные Android lifecycle transitions
+- ошибки permission/start/stop не ломают UI
+- `tgwsproxy` или его выбранная bridge/process-точка подключены за Android service base
+- `flutter analyze` и `flutter test` проходят
 
 ## Предлагаемый порядок следующих задач
 
-1. Уточнить `runtime_bridge_contract.md` вместе с backend-коллегой.
-2. Решить по платформам, где будет FFI, а где process/channel bridge.
-3. Сделать первую реальную bridge-реализацию под одну платформу.
-4. Подключить её через provider без изменения экранов.
-5. Прогнать end-to-end проверку lifecycle-сценариев.
+1. Уточнить различие между Android service base и fully connected `tgwsproxy`.
+2. Решить, как Android будет запускать и контролировать `tgwsproxy`: process boundary, bundled binary, MethodChannel orchestration или другой вариант.
+3. Расширить `ProxyRuntimeSnapshot`, если нужен отдельный статус native backend.
+4. Подключить реальный Android runtime за текущим `QnzapretVpnService`.
+5. Перевести composition/UI со stub на `AndroidProxyRuntime`, когда lifecycle станет достаточно стабильным.
+6. После Android описать equivalent bridge strategy для Linux и Windows.
