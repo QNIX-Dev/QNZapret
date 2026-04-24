@@ -215,10 +215,10 @@ Native strategy engine сейчас умеет:
 
 Userspace forwarding foundation сейчас умеет:
 
-- парсить IPv4 packets из TUN buffer
+- парсить IPv4 и IPv6 packets из TUN buffer
 - выделять UDP datagrams и flow tuple
-- открывать protected `DatagramSocket`, чтобы исходящий UDP не возвращался обратно в VPN
-- синтезировать IPv4/UDP response packets и писать их обратно в TUN output
+- открывать protected `DatagramSocket`, чтобы исходящий IPv4/IPv6 UDP не возвращался обратно в VPN
+- синтезировать IPv4/IPv6 UDP response packets и писать их обратно в TUN output
 - вызывать `StrategyRuntimeEngine.evaluate()` перед отправкой UDP datagram
 - отправлять `udpFake` payload repeats перед реальным datagram, если decision уже содержит такую action
 
@@ -226,6 +226,7 @@ Userspace forwarding foundation сейчас умеет:
 
 - TCP relay/state machine еще не реализован
 - TUN default-route не включается, даже если `establishTunnel=true`, пока `tcpForwarderReady=false`
+- IPv6 extension headers пока не разворачиваются, foundation обрабатывает прямой IPv6 UDP/TCP `nextHeader`
 - QUIC host detection пока не связывает QUIC Initial с доменом без внешней DNS/SNI correlation, поэтому hostlist-based `udpFake` обычно не сработает сам по себе
 - TCP `fake` поверх обычного protected socket не считается безопасным no-root действием, потому что без raw fooling пакет увидит настоящий сервер
 
@@ -251,6 +252,8 @@ Userspace forwarding foundation сейчас умеет:
 - `tunnelActive`
 - `packetCodecReady`
 - `udpForwarderReady`
+- `ipv6PacketCodecReady`
+- `ipv6UdpForwarderReady`
 - `tcpForwarderReady`
 - `activeProfileName`
 
@@ -269,6 +272,8 @@ Wire payload:
   'tunnelActive': false,
   'packetCodecReady': true,
   'udpForwarderReady': true,
+  'ipv6PacketCodecReady': true,
+  'ipv6UdpForwarderReady': true,
   'tcpForwarderReady': false,
   'activeProfileName': 'Default lightweight',
 }
@@ -282,8 +287,10 @@ Wire payload:
 - `strategyEngineReady` означает, что native strategy engine создан, payload blobs загружены, а hostlists зарегистрированы для lazy matching.
 - `trafficForwarderReady` означает, что TUN fd связан с полным TCP/UDP userspace forwarding layer. Сейчас на Android остается `false`.
 - `tunnelActive` означает, что Android TUN fd реально установлен. Сейчас guard держит его `false`, пока TCP relay не готов.
-- `packetCodecReady` означает, что Android runtime умеет парсить IPv4/UDP packets и собирать UDP response packets.
+- `packetCodecReady` означает, что Android runtime умеет парсить IPv4/IPv6 UDP packets и собирать UDP response packets.
 - `udpForwarderReady` означает, что UDP relay core готов использовать protected `DatagramSocket` и писать ответы обратно в TUN.
+- `ipv6PacketCodecReady` означает, что IPv6 packet parsing/UDP response builder включены в foundation.
+- `ipv6UdpForwarderReady` означает, что UDP relay core умеет работать с IPv6 destination/source addresses.
 - `tcpForwarderReady` означает готовность TCP userspace relay/state machine. Сейчас на Android остается `false`.
 - `activeProfileName` дает UI человекочитаемое имя профиля, если runtime активен.
 - `message` должен быть пригоден для отображения в UI.

@@ -127,7 +127,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - `getSnapshot()` после старта должен показать `running` и `serviceActive`
 - snapshot/message после старта должен отражать выбранный strategy profile
 - snapshot/message после старта должен отражать наличие или отсутствие нужных strategy assets
-- snapshot после старта должен различать `strategyEngineReady`, `trafficForwarderReady`, `tunnelActive`, `packetCodecReady`, `udpForwarderReady` и `tcpForwarderReady`
+- snapshot после старта должен различать `strategyEngineReady`, `trafficForwarderReady`, `tunnelActive`, `packetCodecReady`, `udpForwarderReady`, `ipv6PacketCodecReady`, `ipv6UdpForwarderReady` и `tcpForwarderReady`
 - домен вне hostlists должен проходить direct forwarding без fake/split/udpFake действий
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
@@ -195,7 +195,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - strategy profile передается из Dart в Android bridge
 - hostlists и payload blobs дефолтной стратегии упакованы в Android assets
 - native strategy engine загружает payload blobs, регистрирует hostlists и возвращает direct/desync decisions
-- packet codec и UDP relay core готовы, но не включают TUN default-route без TCP relay
+- IPv4/IPv6 packet codec и UDP relay core готовы, но не включают TUN default-route без TCP relay
 - hostlists используются как включение desync-правил, а unmatched traffic сохраняет политику `direct`
 - local strategy proxy и TUN transport подключены за Android service
 - userspace forwarder передает трафик из TUN fd в локальный strategy proxy

@@ -7,15 +7,24 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal data class TunForwarderCapabilities(
-    val packetCodecReady: Boolean,
-    val udpForwarderReady: Boolean,
+    val ipv4PacketCodecReady: Boolean,
+    val ipv6PacketCodecReady: Boolean,
+    val ipv4UdpForwarderReady: Boolean,
+    val ipv6UdpForwarderReady: Boolean,
     val tcpForwarderReady: Boolean,
 ) {
+    val packetCodecReady: Boolean
+        get() = ipv4PacketCodecReady && ipv6PacketCodecReady
+
+    val udpForwarderReady: Boolean
+        get() = ipv4UdpForwarderReady && ipv6UdpForwarderReady
+
     val fullyReady: Boolean
         get() = packetCodecReady && udpForwarderReady && tcpForwarderReady
 }
@@ -56,7 +65,7 @@ internal class TunPacketForwarder(
         return TunPacketForwarderStatus(
             running = true,
             capabilities = CAPABILITIES,
-            message = "TUN packet forwarder started with IPv4/UDP support.",
+            message = "TUN packet forwarder started with IPv4/IPv6 UDP support.",
         )
     }
 
@@ -101,7 +110,7 @@ internal class TunPacketForwarder(
     }
 
     private fun handlePacket(buffer: ByteArray, packetLength: Int) {
-        val packet = IpPacketCodec.parseIpv4Packet(buffer, packetLength) ?: return
+        val packet = IpPacketCodec.parseIpPacket(buffer, packetLength) ?: return
         when (packet.protocol) {
             IpProtocolNumber.UDP -> forwardUdp(buffer, packet)
             IpProtocolNumber.TCP -> {
@@ -110,7 +119,7 @@ internal class TunPacketForwarder(
         }
     }
 
-    private fun forwardUdp(buffer: ByteArray, packet: Ipv4Packet) {
+    private fun forwardUdp(buffer: ByteArray, packet: IpPacket) {
         val datagram = IpPacketCodec.parseUdpDatagram(buffer, packet) ?: return
         val decision = localProxy.evaluate(
             StrategyFlowProbe(
@@ -151,14 +160,16 @@ internal class TunPacketForwarder(
     }
 
     private data class UdpFlowKey(
-        val sourceAddress: Int,
+        val ipVersion: IpVersion,
+        val sourceAddress: InetAddress,
         val sourcePort: Int,
-        val destinationAddress: Int,
+        val destinationAddress: InetAddress,
         val destinationPort: Int,
     ) {
         companion object {
             fun from(datagram: UdpDatagram): UdpFlowKey {
                 return UdpFlowKey(
+                    ipVersion = datagram.ipVersion,
                     sourceAddress = datagram.sourceAddress,
                     sourcePort = datagram.sourcePort,
                     destinationAddress = datagram.destinationAddress,
@@ -187,7 +198,7 @@ internal class TunPacketForwarder(
 
             socket.soTimeout = SOCKET_TIMEOUT_MS
             socket.connect(
-                IpPacketCodec.inetAddressFromIpv4(key.destinationAddress),
+                key.destinationAddress,
                 key.destinationPort,
             )
             receiverThread = Thread(::receiveLoop, "QNZapret-UDP-${key.destinationPort}").apply {
@@ -226,7 +237,8 @@ internal class TunPacketForwarder(
                         packet.offset,
                         packet.offset + packet.length,
                     )
-                    val response = IpPacketCodec.buildUdpIpv4Packet(
+                    val response = IpPacketCodec.buildUdpPacket(
+                        ipVersion = key.ipVersion,
                         sourceAddress = key.destinationAddress,
                         destinationAddress = key.sourceAddress,
                         sourcePort = key.destinationPort,
@@ -245,8 +257,10 @@ internal class TunPacketForwarder(
 
     companion object {
         val CAPABILITIES = TunForwarderCapabilities(
-            packetCodecReady = true,
-            udpForwarderReady = true,
+            ipv4PacketCodecReady = true,
+            ipv6PacketCodecReady = true,
+            ipv4UdpForwarderReady = true,
+            ipv6UdpForwarderReady = true,
             tcpForwarderReady = false,
         )
 

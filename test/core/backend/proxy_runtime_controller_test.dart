@@ -17,6 +17,8 @@ void main() {
         tunnelActive: false,
         packetCodecReady: false,
         udpForwarderReady: false,
+        ipv6PacketCodecReady: false,
+        ipv6UdpForwarderReady: false,
         tcpForwarderReady: false,
       ),
     );
@@ -50,6 +52,8 @@ void main() {
           tunnelActive: false,
           packetCodecReady: false,
           udpForwarderReady: false,
+          ipv6PacketCodecReady: false,
+          ipv6UdpForwarderReady: false,
           tcpForwarderReady: false,
         ),
       );

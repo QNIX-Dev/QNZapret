@@ -60,8 +60,10 @@ class QnzapretVpnService : VpnService() {
             append(" TCP ports: ${startResult.plan.tcpPorts.sorted().joinToString()}.")
             append(" UDP ports: ${startResult.plan.udpPorts.sorted().joinToString()}.")
             append(
-                " Forwarder: IPv4 codec=${startResult.tunState.packetCodecReady}, " +
+                " Forwarder: packet codec=${startResult.tunState.packetCodecReady}, " +
+                    "IPv6 codec=${startResult.tunState.ipv6PacketCodecReady}, " +
                     "UDP=${startResult.tunState.udpForwarderReady}, " +
+                    "IPv6 UDP=${startResult.tunState.ipv6UdpForwarderReady}, " +
                     "TCP=${startResult.tunState.tcpForwarderReady}.",
             )
             if (startResult.plan.requiredBlobKeys.isNotEmpty()) {
@@ -84,6 +86,8 @@ class QnzapretVpnService : VpnService() {
             newTunnelActive = startResult.tunState.active,
             newPacketCodecReady = startResult.tunState.packetCodecReady,
             newUdpForwarderReady = startResult.tunState.udpForwarderReady,
+            newIpv6PacketCodecReady = startResult.tunState.ipv6PacketCodecReady,
+            newIpv6UdpForwarderReady = startResult.tunState.ipv6UdpForwarderReady,
             newTcpForwarderReady = startResult.tunState.tcpForwarderReady,
             newActiveProfileName = startResult.plan.profileName,
         )

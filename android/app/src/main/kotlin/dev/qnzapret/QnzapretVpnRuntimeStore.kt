@@ -20,6 +20,8 @@ internal object QnzapretVpnRuntimeStore {
     private var tunnelActive: Boolean = false
     private var packetCodecReady: Boolean = false
     private var udpForwarderReady: Boolean = false
+    private var ipv6PacketCodecReady: Boolean = false
+    private var ipv6UdpForwarderReady: Boolean = false
     private var tcpForwarderReady: Boolean = false
     private var activeProfileName: String = ""
 
@@ -42,6 +44,8 @@ internal object QnzapretVpnRuntimeStore {
             "tunnelActive" to tunnelActive,
             "packetCodecReady" to packetCodecReady,
             "udpForwarderReady" to udpForwarderReady,
+            "ipv6PacketCodecReady" to ipv6PacketCodecReady,
+            "ipv6UdpForwarderReady" to ipv6UdpForwarderReady,
             "tcpForwarderReady" to tcpForwarderReady,
             "activeProfileName" to activeProfileName,
         )
@@ -77,6 +81,8 @@ internal object QnzapretVpnRuntimeStore {
         newTunnelActive: Boolean = false,
         newPacketCodecReady: Boolean = false,
         newUdpForwarderReady: Boolean = false,
+        newIpv6PacketCodecReady: Boolean = false,
+        newIpv6UdpForwarderReady: Boolean = false,
         newTcpForwarderReady: Boolean = false,
         newActiveProfileName: String = "",
     ) {
@@ -87,6 +93,8 @@ internal object QnzapretVpnRuntimeStore {
         tunnelActive = newTunnelActive
         packetCodecReady = newPacketCodecReady
         udpForwarderReady = newUdpForwarderReady
+        ipv6PacketCodecReady = newIpv6PacketCodecReady
+        ipv6UdpForwarderReady = newIpv6UdpForwarderReady
         tcpForwarderReady = newTcpForwarderReady
         activeProfileName = newActiveProfileName
         message = newMessage
@@ -131,6 +139,8 @@ internal object QnzapretVpnRuntimeStore {
         tunnelActive = false
         packetCodecReady = false
         udpForwarderReady = false
+        ipv6PacketCodecReady = false
+        ipv6UdpForwarderReady = false
         tcpForwarderReady = false
         activeProfileName = ""
     }

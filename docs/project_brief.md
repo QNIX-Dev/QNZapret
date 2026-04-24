@@ -45,9 +45,9 @@ Android-направление строится как no-root VPN/proxy runtime
 - Android strategy runtime coordinator в `QnzapretAndroidRuntime.kt`
 - Android local strategy proxy lifecycle в `LocalStrategyProxy.kt`
 - native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
-- IPv4/UDP packet codec в `IpPacketCodec.kt`
-- userspace forwarder core в `TunPacketForwarder.kt` с UDP relay через protected `DatagramSocket`
-- TUN lifecycle guard в `TunTransport.kt`, который не включает VPN-перехват до готовности полного TCP/UDP forwarder
+- IPv4/IPv6 UDP packet codec в `IpPacketCodec.kt`
+- userspace forwarder core в `TunPacketForwarder.kt` с IPv4/IPv6 UDP relay через protected `DatagramSocket`
+- TUN lifecycle guard в `TunTransport.kt`, который держит IPv4/IPv6 TUN routes выключенными до готовности полного TCP/UDP forwarder
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`

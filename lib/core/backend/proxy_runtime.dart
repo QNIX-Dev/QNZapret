@@ -304,6 +304,8 @@ class ProxyRuntimeSnapshot {
     required this.tunnelActive,
     required this.packetCodecReady,
     required this.udpForwarderReady,
+    required this.ipv6PacketCodecReady,
+    required this.ipv6UdpForwarderReady,
     required this.tcpForwarderReady,
     this.activeProfileName,
   });
@@ -319,6 +321,8 @@ class ProxyRuntimeSnapshot {
   final bool tunnelActive;
   final bool packetCodecReady;
   final bool udpForwarderReady;
+  final bool ipv6PacketCodecReady;
+  final bool ipv6UdpForwarderReady;
   final bool tcpForwarderReady;
   final String? activeProfileName;
 
@@ -335,6 +339,8 @@ class ProxyRuntimeSnapshot {
       tunnelActive: false,
       packetCodecReady: false,
       udpForwarderReady: false,
+      ipv6PacketCodecReady: false,
+      ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
     );
   }
@@ -353,6 +359,8 @@ class ProxyRuntimeSnapshot {
       tunnelActive: map['tunnelActive'] as bool? ?? false,
       packetCodecReady: map['packetCodecReady'] as bool? ?? false,
       udpForwarderReady: map['udpForwarderReady'] as bool? ?? false,
+      ipv6PacketCodecReady: map['ipv6PacketCodecReady'] as bool? ?? false,
+      ipv6UdpForwarderReady: map['ipv6UdpForwarderReady'] as bool? ?? false,
       tcpForwarderReady: map['tcpForwarderReady'] as bool? ?? false,
       activeProfileName: (activeProfileName?.isEmpty ?? true)
           ? null
@@ -372,6 +380,8 @@ class ProxyRuntimeSnapshot {
     bool? tunnelActive,
     bool? packetCodecReady,
     bool? udpForwarderReady,
+    bool? ipv6PacketCodecReady,
+    bool? ipv6UdpForwarderReady,
     bool? tcpForwarderReady,
     String? activeProfileName,
   }) {
@@ -388,6 +398,9 @@ class ProxyRuntimeSnapshot {
       tunnelActive: tunnelActive ?? this.tunnelActive,
       packetCodecReady: packetCodecReady ?? this.packetCodecReady,
       udpForwarderReady: udpForwarderReady ?? this.udpForwarderReady,
+      ipv6PacketCodecReady: ipv6PacketCodecReady ?? this.ipv6PacketCodecReady,
+      ipv6UdpForwarderReady:
+          ipv6UdpForwarderReady ?? this.ipv6UdpForwarderReady,
       tcpForwarderReady: tcpForwarderReady ?? this.tcpForwarderReady,
       activeProfileName: activeProfileName ?? this.activeProfileName,
     );
@@ -434,6 +447,8 @@ final class StubProxyRuntime implements ProxyRuntime {
       tunnelActive: false,
       packetCodecReady: false,
       udpForwarderReady: false,
+      ipv6PacketCodecReady: false,
+      ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
     );
   }

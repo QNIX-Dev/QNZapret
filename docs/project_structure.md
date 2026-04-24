@@ -171,9 +171,9 @@ test/
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimeEngine.kt`
   Принимает flow probe и возвращает direct/desync decision по strategy profile, hostlists и payload assets.
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
-  Парсит IPv4/UDP packets из TUN и собирает IPv4/UDP response packets для записи обратно в TUN.
+  Парсит IPv4/IPv6 UDP packets из TUN и собирает IPv4/IPv6 UDP response packets для записи обратно в TUN.
 - `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
-  Userspace forwarder core: читает TUN packets, умеет UDP relay через Android protected `DatagramSocket` и вызывает strategy engine перед отправкой datagram.
+  Userspace forwarder core: читает TUN packets, умеет IPv4/IPv6 UDP relay через Android protected `DatagramSocket` и вызывает strategy engine перед отправкой datagram.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
   Компилятор профиля в компактный runtime plan.
   План сохраняет `unmatchedTrafficPolicy`, чтобы future forwarder знал, что потоки вне hostlists нужно вести direct forwarding без desync-действий.
@@ -182,7 +182,7 @@ test/
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
   Lifecycle локального strategy proxy и держатель native strategy engine.
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
-  Lifecycle TUN transport guard. Сейчас не вызывает `establish()`, пока не готов полный TCP/UDP userspace forwarder.
+  Lifecycle TUN transport guard. Сейчас не вызывает `establish()`, пока не готов полный TCP/UDP userspace forwarder; future TUN builder уже описывает IPv4 и IPv6 адреса/routes/DNS.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
   In-memory snapshot store для Android runtime-состояния.
 

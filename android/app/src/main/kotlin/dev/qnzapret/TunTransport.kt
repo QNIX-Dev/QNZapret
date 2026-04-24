@@ -9,6 +9,8 @@ internal data class TunTransportState(
     val forwarderReady: Boolean,
     val packetCodecReady: Boolean,
     val udpForwarderReady: Boolean,
+    val ipv6PacketCodecReady: Boolean,
+    val ipv6UdpForwarderReady: Boolean,
     val tcpForwarderReady: Boolean,
     val message: String,
 )
@@ -31,8 +33,10 @@ internal class TunTransport(
                 forwarderReady = capabilities.fullyReady,
                 packetCodecReady = capabilities.packetCodecReady,
                 udpForwarderReady = capabilities.udpForwarderReady,
+                ipv6PacketCodecReady = capabilities.ipv6PacketCodecReady,
+                ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
-                message = "TUN establishment is deferred. Packet codec and UDP relay are ready; TCP relay is pending.",
+                message = "TUN establishment is deferred. IPv4/IPv6 packet codec and UDP relay are ready; TCP relay is pending.",
             )
         }
 
@@ -42,6 +46,8 @@ internal class TunTransport(
                 forwarderReady = false,
                 packetCodecReady = capabilities.packetCodecReady,
                 udpForwarderReady = capabilities.udpForwarderReady,
+                ipv6PacketCodecReady = capabilities.ipv6PacketCodecReady,
+                ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
                 message = "TUN establishment was requested for local proxy " +
                     "${proxyEndpoint.host}:${proxyEndpoint.port}, but TCP relay is pending.",
@@ -54,6 +60,8 @@ internal class TunTransport(
                 forwarderReady = false,
                 packetCodecReady = capabilities.packetCodecReady,
                 udpForwarderReady = capabilities.udpForwarderReady,
+                ipv6PacketCodecReady = capabilities.ipv6PacketCodecReady,
+                ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
                 message = "Android returned no TUN fd for the requested VPN session.",
             )
@@ -73,6 +81,8 @@ internal class TunTransport(
             forwarderReady = forwarderStatus.capabilities.fullyReady,
             packetCodecReady = forwarderStatus.capabilities.packetCodecReady,
             udpForwarderReady = forwarderStatus.capabilities.udpForwarderReady,
+            ipv6PacketCodecReady = forwarderStatus.capabilities.ipv6PacketCodecReady,
+            ipv6UdpForwarderReady = forwarderStatus.capabilities.ipv6UdpForwarderReady,
             tcpForwarderReady = forwarderStatus.capabilities.tcpForwarderReady,
             message = "TUN fd established for local proxy ${proxyEndpoint.host}:${proxyEndpoint.port}. " +
                 forwarderStatus.message,
@@ -96,14 +106,20 @@ internal class TunTransport(
             .setSession("QNZapret")
             .setMtu(config.tunnelMtu)
             .addAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX_LENGTH)
+            .addAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX_LENGTH)
             .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
             .addDnsServer(CLOUDFLARE_DNS)
+            .addDnsServer(CLOUDFLARE_IPV6_DNS)
             .establish()
     }
 
     private companion object {
         private const val TUN_IPV4_ADDRESS = "10.24.0.2"
         private const val TUN_IPV4_PREFIX_LENGTH = 32
+        private const val TUN_IPV6_ADDRESS = "fd00:24::2"
+        private const val TUN_IPV6_PREFIX_LENGTH = 128
         private const val CLOUDFLARE_DNS = "1.1.1.1"
+        private const val CLOUDFLARE_IPV6_DNS = "2606:4700:4700::1111"
     }
 }

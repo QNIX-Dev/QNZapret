@@ -78,6 +78,8 @@ void main() {
       'tunnelActive': false,
       'packetCodecReady': true,
       'udpForwarderReady': true,
+      'ipv6PacketCodecReady': true,
+      'ipv6UdpForwarderReady': true,
       'tcpForwarderReady': false,
       'activeProfileName': 'Default lightweight',
     });
@@ -93,6 +95,8 @@ void main() {
     expect(snapshot.tunnelActive, isFalse);
     expect(snapshot.packetCodecReady, isTrue);
     expect(snapshot.udpForwarderReady, isTrue);
+    expect(snapshot.ipv6PacketCodecReady, isTrue);
+    expect(snapshot.ipv6UdpForwarderReady, isTrue);
     expect(snapshot.tcpForwarderReady, isFalse);
     expect(snapshot.activeProfileName, 'Default lightweight');
   });
