@@ -3,6 +3,29 @@ package dev.qnzapret
 import android.content.Context
 import java.util.Locale
 
+internal object HostNameNormalizer {
+    fun normalize(host: String?): String? {
+        if (host.isNullOrBlank()) {
+            return null
+        }
+
+        val normalized = host
+            .trim()
+            .trim('"', '\'')
+            .substringAfter("://", host)
+            .substringBefore('/')
+            .substringBefore(':')
+            .trimEnd('.')
+            .lowercase(Locale.US)
+
+        return normalized.takeIf { value ->
+            value.isNotBlank() &&
+                value.none { it.isWhitespace() } &&
+                "." in value
+        }
+    }
+}
+
 internal interface HostlistMatcher {
     val path: String
     val loadedEntryCount: Int?
@@ -62,7 +85,7 @@ internal class AssetHostlistMatcher(
                 return null
             }
 
-            return normalizeHost(
+            return HostNameNormalizer.normalize(
                 withoutComment
                     .trim('"', '\'')
                     .removePrefix("||")
@@ -76,24 +99,7 @@ internal class AssetHostlistMatcher(
         }
 
         fun normalizeHost(host: String?): String? {
-            if (host.isNullOrBlank()) {
-                return null
-            }
-
-            val normalized = host
-                .trim()
-                .trim('"', '\'')
-                .substringAfter("://", host)
-                .substringBefore('/')
-                .substringBefore(':')
-                .trimEnd('.')
-                .lowercase(Locale.US)
-
-            return normalized.takeIf { value ->
-                value.isNotBlank() &&
-                    value.none { it.isWhitespace() } &&
-                    "." in value
-            }
+            return HostNameNormalizer.normalize(host)
         }
     }
 }

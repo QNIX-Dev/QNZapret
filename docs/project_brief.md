@@ -45,6 +45,7 @@ Android-направление строится как no-root VPN/proxy runtime
 - Android strategy runtime coordinator в `QnzapretAndroidRuntime.kt`
 - Android local strategy proxy lifecycle в `LocalStrategyProxy.kt`
 - native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
+- QUIC host correlation в `QuicHostCorrelation.kt`: UDP/53 DNS A/AAAA responses и уже распознанный TCP HTTP/TLS host связываются с destination IP, чтобы UDP/443 QUIC Initial мог получить `knownHost`
 - IPv4/IPv6 UDP packet codec и TCP segment codec в `IpPacketCodec.kt`
 - userspace forwarder core в `TunPacketForwarder.kt` с IPv4/IPv6 UDP relay через protected `DatagramSocket` и TCP relay/state machine через protected `Socket`; TCP path обрабатывает duplicate/overlap retransmits, ACK/drop для out-of-order payload и TCP/UDP idle session cleanup
 - TUN lifecycle в `TunTransport.kt`: default-route остается выключенным при `establishTunnel=false`, но может подниматься при готовых TCP/UDP capabilities и явном `establishTunnel=true`
@@ -52,13 +53,13 @@ Android-направление строится как no-root VPN/proxy runtime
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
 - базовые тесты сериализации и парсинга runtime-моделей
-- Android JVM unit tests для TCP relay state и IPv4/IPv6 TCP packet codec
+- Android JVM unit tests для TCP relay state, IPv4/IPv6 TCP packet codec, QUIC host correlation и strategy engine QUIC decisions
 
 Что еще не подключено:
 
 - оставшийся TCP hardening: out-of-order buffering, полноценный write backpressure, расширенная диагностика и Android device smoke при `establishTunnel=true`
 - raw TCP `fake`/sequence tricks в no-root socket mode; текущий TCP path безопасно применяет только split как best-effort stream write split и пропускает небезопасный fake
-- QUIC host correlation для применения `udpFake` не только при заранее известном host target
+- расширенная QUIC correlation для DoH/DoT, DNS cache misses и более сложных multi-IP сценариев; базовый UDP/53 + TCP HTTP/TLS correlation уже подключен
 - поток логов из backend
 - desktop bridge implementations для Linux и Windows
 - полноценные runtime-контролы, пресеты и профили стратегий
@@ -133,6 +134,6 @@ Composition root уже передает в экран `createDefaultProxyRuntim
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
 1. добить оставшийся TCP hardening: out-of-order buffering, write backpressure, диагностика и Android device smoke при `establishTunnel=true`;
-2. добавить QUIC host correlation к существующему strategy engine;
-3. добавить production log stream поверх текущего controller/snapshot слоя;
+2. добавить production log stream поверх текущего controller/snapshot слоя;
+3. расширить QUIC correlation за пределы UDP/53 и prior TCP HTTP/TLS hints;
 4. после Android закрепить equivalent contract для Linux и Windows.

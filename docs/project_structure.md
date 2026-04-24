@@ -45,6 +45,7 @@ android/
         LocalStrategyProxy.kt
         MainActivity.kt
         ProxyRuntimeBridge.kt
+        QuicHostCorrelation.kt
         QnzapretAndroidRuntime.kt
         QnzapretVpnRuntimeStore.kt
         QnzapretVpnService.kt
@@ -60,6 +61,8 @@ android/
     src/test/
       kotlin/dev/qnzapret/
         IpPacketCodecTest.kt
+        QuicHostCorrelationTest.kt
+        StrategyRuntimeEngineTest.kt
         TcpRelayStateTest.kt
 
 linux/
@@ -192,6 +195,8 @@ test/
   Lifecycle TUN transport. При `establishTunnel=false` оставляет default-route выключенным и сообщает capability flags; при `establishTunnel=true` поднимает IPv4/IPv6 TUN routes/DNS и запускает forwarder только когда TCP/UDP capabilities готовы.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
   In-memory snapshot store для Android runtime-состояния.
+- `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`
+  Best-effort QUIC host correlation: парсит UDP/53 DNS A/AAAA responses, сохраняет CNAME-aware `IP -> host` mapping и принимает HTTP/TLS host hints для последующих UDP/443 QUIC decisions.
 
 Channel:
 
@@ -225,6 +230,8 @@ Channel:
 - `test/widget_test.dart`
 - `android/app/src/test/kotlin/dev/qnzapret/TcpRelayStateTest.kt`
 - `android/app/src/test/kotlin/dev/qnzapret/IpPacketCodecTest.kt`
+- `android/app/src/test/kotlin/dev/qnzapret/QuicHostCorrelationTest.kt`
+- `android/app/src/test/kotlin/dev/qnzapret/StrategyRuntimeEngineTest.kt`
 
 При значимых изменениях runtime-контракта нужно запускать:
 

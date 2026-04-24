@@ -45,8 +45,8 @@ class HomeScreen extends StatefulWidget {
   ];
 
   static const _nextMilestones = [
-    'implement TCP userspace relay before enabling TUN default-route',
-    'connect split actions and QUIC host correlation to forwarding',
+    'run Android device smoke with establishTunnel enabled',
+    'harden TCP out-of-order buffering and write backpressure',
     'add runtime logs, connection presets, and desktop bridge contracts',
   ];
 
@@ -325,7 +325,7 @@ class _RuntimePanel extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            'Следующий логический слой: TCP userspace relay между Android TUN fd, strategy decisions и protected sockets.',
+            'Следующий логический слой: Android device smoke для TUN forwarding, diagnostics и устойчивого runtime feedback.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: AppTheme.inkSoft,
               height: 1.45,
