@@ -6,25 +6,33 @@ internal data class AndroidRuntimeStartResult(
     val plan: StrategyRuntimePlan,
     val assetReport: StrategyAssetReport,
     val proxyEndpoint: LocalStrategyProxyEndpoint,
+    val proxyStatus: LocalStrategyProxyStatus,
     val tunState: TunTransportState,
 )
 
 internal class QnzapretAndroidRuntime(
     private val service: VpnService,
 ) {
-    private val localProxy = LocalStrategyProxy()
+    private val localProxy = LocalStrategyProxy(service)
     private val tunTransport = TunTransport(service)
 
     fun start(config: VpnRuntimeConfig): AndroidRuntimeStartResult {
         val plan = StrategyProfileCompiler.compile(config.strategyProfile)
         val assetReport = StrategyAssetVerifier.verify(service, config.strategyProfile)
-        val proxyEndpoint = localProxy.start(config, plan)
-        val tunState = tunTransport.start(config, proxyEndpoint)
+        if (!assetReport.isComplete) {
+            throw IllegalStateException(
+                "Missing strategy assets: ${assetReport.missingPaths.sorted().joinToString()}",
+            )
+        }
+
+        val proxyStartResult = localProxy.start(config, plan)
+        val tunState = tunTransport.start(config, proxyStartResult.endpoint)
 
         return AndroidRuntimeStartResult(
             plan = plan,
             assetReport = assetReport,
-            proxyEndpoint = proxyEndpoint,
+            proxyEndpoint = proxyStartResult.endpoint,
+            proxyStatus = proxyStartResult.status,
             tunState = tunState,
         )
     }

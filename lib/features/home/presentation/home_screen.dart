@@ -45,9 +45,9 @@ class HomeScreen extends StatefulWidget {
   ];
 
   static const _nextMilestones = [
-    'connect Android bridge to the local strategy runtime',
-    'define desktop bridge contracts for Linux and Windows',
-    'add connection presets, strategy profiles, and live logs',
+    'wire Android TUN fd to the userspace forwarder',
+    'connect strategy decisions to stream/datagram forwarding',
+    'add runtime logs, connection presets, and desktop bridge contracts',
   ];
 
   @override
@@ -275,7 +275,7 @@ class _HeroPanel extends StatelessWidget {
             children: [
               _MetricTile(value: '3', label: 'target platforms'),
               _MetricTile(value: '1', label: 'shared Flutter shell'),
-              _MetricTile(value: '1', label: 'Android bridge skeleton'),
+              _MetricTile(value: '1', label: 'Android strategy engine'),
             ],
           ),
         ],
@@ -325,7 +325,7 @@ class _RuntimePanel extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            'Следующий логический слой: platform adapters для Android/JNA, Linux и Windows с единым контрактом запуска, остановки, статуса и логов.',
+            'Следующий логический слой: userspace forwarder между Android TUN fd, strategy decisions и protected sockets.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: AppTheme.inkSoft,
               height: 1.45,

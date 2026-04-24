@@ -6,6 +6,7 @@ import java.io.IOException
 
 internal data class TunTransportState(
     val active: Boolean,
+    val forwarderReady: Boolean,
     val message: String,
 )
 
@@ -21,30 +22,17 @@ internal class TunTransport(
         if (!config.establishTunnel) {
             return TunTransportState(
                 active = false,
+                forwarderReady = false,
                 message = "TUN establishment is deferred until the userspace forwarder is wired.",
             )
         }
 
-        val nextDescriptor = service.Builder()
-            .setSession("QNZapret")
-            .setMtu(config.tunnelMtu)
-            .addAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX_LENGTH)
-            .addRoute("0.0.0.0", 0)
-            .addDnsServer(CLOUDFLARE_DNS)
-            .establish()
-
-        descriptor = nextDescriptor
-        return if (nextDescriptor != null) {
-            TunTransportState(
-                active = true,
-                message = "TUN fd established for local proxy ${proxyEndpoint.host}:${proxyEndpoint.port}.",
-            )
-        } else {
-            TunTransportState(
-                active = false,
-                message = "Android returned no TUN fd for the requested VPN session.",
-            )
-        }
+        return TunTransportState(
+            active = false,
+            forwarderReady = false,
+            message = "TUN establishment was requested for local proxy " +
+                "${proxyEndpoint.host}:${proxyEndpoint.port}, but the userspace forwarder is not wired yet.",
+        )
     }
 
     fun stop() {
@@ -54,6 +42,17 @@ internal class TunTransport(
         } finally {
             descriptor = null
         }
+    }
+
+    @Suppress("unused")
+    private fun establishTunnel(config: VpnRuntimeConfig): ParcelFileDescriptor? {
+        return service.Builder()
+            .setSession("QNZapret")
+            .setMtu(config.tunnelMtu)
+            .addAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX_LENGTH)
+            .addRoute("0.0.0.0", 0)
+            .addDnsServer(CLOUDFLARE_DNS)
+            .establish()
     }
 
     private companion object {

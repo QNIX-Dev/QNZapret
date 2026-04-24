@@ -12,6 +12,9 @@ void main() {
         backendConnected: true,
         vpnPermissionGranted: true,
         serviceActive: false,
+        strategyEngineReady: false,
+        trafficForwarderReady: false,
+        tunnelActive: false,
       ),
     );
     final controller = ProxyRuntimeController(runtime: runtime);
@@ -39,6 +42,9 @@ void main() {
           backendConnected: true,
           vpnPermissionGranted: true,
           serviceActive: false,
+          strategyEngineReady: false,
+          trafficForwarderReady: false,
+          tunnelActive: false,
         ),
       );
       final controller = ProxyRuntimeController(runtime: runtime);

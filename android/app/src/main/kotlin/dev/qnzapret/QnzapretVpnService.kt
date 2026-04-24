@@ -41,10 +41,22 @@ class QnzapretVpnService : VpnService() {
         }
 
         val runtimeMessage = buildString {
-            append("Android VPN strategy runtime skeleton is active.")
+            append("Android VPN strategy engine is active.")
             append(" Strategy: ${startResult.plan.profileName} (${startResult.plan.ruleCount} rules).")
             append(" Unmatched traffic: ${startResult.plan.unmatchedTrafficPolicy.wireValue}.")
             append(" Local proxy: ${startResult.proxyEndpoint.host}:${startResult.proxyEndpoint.port}.")
+            append(
+                " Engine assets: ${startResult.proxyStatus.hostlistCount} hostlists, " +
+                    "${startResult.proxyStatus.blobCount} blobs.",
+            )
+            append(
+                " Protocols: ${
+                    startResult.proxyStatus.supportedProtocols
+                        .map { it.wireValue }
+                        .sorted()
+                        .joinToString()
+                }.",
+            )
             append(" TCP ports: ${startResult.plan.tcpPorts.sorted().joinToString()}.")
             append(" UDP ports: ${startResult.plan.udpPorts.sorted().joinToString()}.")
             if (startResult.plan.requiredBlobKeys.isNotEmpty()) {
@@ -60,7 +72,13 @@ class QnzapretVpnService : VpnService() {
             append(" ${startResult.tunState.message}")
         }
 
-        QnzapretVpnRuntimeStore.markRunning(runtimeMessage)
+        QnzapretVpnRuntimeStore.markRunning(
+            newMessage = runtimeMessage,
+            newStrategyEngineReady = startResult.proxyStatus.engineReady,
+            newTrafficForwarderReady = startResult.tunState.forwarderReady,
+            newTunnelActive = startResult.tunState.active,
+            newActiveProfileName = startResult.plan.profileName,
+        )
         return START_NOT_STICKY
     }
 
@@ -120,7 +138,7 @@ class QnzapretVpnService : VpnService() {
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("QNZapret runtime")
-            .setContentText("Android strategy runtime skeleton is running.")
+            .setContentText("Android strategy engine is running.")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)

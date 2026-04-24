@@ -39,14 +39,18 @@ android/
           quic_initial_www_google_com.bin
           tls_clienthello_www_google_com.bin
       kotlin/dev/qnzapret/
+        HostlistMatcher.kt
+        L7Detectors.kt
         LocalStrategyProxy.kt
         MainActivity.kt
         ProxyRuntimeBridge.kt
         QnzapretAndroidRuntime.kt
         QnzapretVpnRuntimeStore.kt
         QnzapretVpnService.kt
+        StrategyAssetStore.kt
         StrategyAssetVerifier.kt
         StrategyProfile.kt
+        StrategyRuntimeEngine.kt
         StrategyRuntimePlan.kt
         TunTransport.kt
         VpnRuntimeConfig.kt
@@ -149,22 +153,30 @@ test/
   `MethodChannel` bridge между Dart и Android runtime.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnService.kt`
   Foreground `VpnService`.
-  Сейчас поднимает notification и стартует strategy runtime skeleton.
+  Сейчас поднимает notification и стартует native strategy runtime.
 - `android/app/src/main/kotlin/dev/qnzapret/VpnRuntimeConfig.kt`
   Android-представление `ProxyLaunchConfig`, включая strategy profile и TUN flags.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyProfile.kt`
   Kotlin-модель и codec для strategy profile payload.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetVerifier.kt`
-  Проверяет наличие hostlists и payload blobs в Android assets перед запуском runtime skeleton.
+  Проверяет наличие hostlists и payload blobs в Android assets перед запуском runtime.
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetStore.kt`
+  Загружает payload blobs и регистрирует lazy hostlist matchers для native strategy engine.
+- `android/app/src/main/kotlin/dev/qnzapret/HostlistMatcher.kt`
+  Нормализует hostlist entries и матчинг exact/suffix доменов.
+- `android/app/src/main/kotlin/dev/qnzapret/L7Detectors.kt`
+  Детектит HTTP Host, TLS ClientHello SNI и базовый QUIC Initial marker.
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimeEngine.kt`
+  Принимает flow probe и возвращает direct/desync decision по strategy profile, hostlists и payload assets.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
   Компилятор профиля в компактный runtime plan.
   План сохраняет `unmatchedTrafficPolicy`, чтобы future forwarder знал, что потоки вне hostlists нужно вести direct forwarding без desync-действий.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretAndroidRuntime.kt`
-  Координатор Android runtime skeleton.
+  Координатор Android runtime: компилирует профиль, проверяет assets, запускает local strategy proxy и TUN lifecycle.
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
-  Lifecycle-заготовка локального strategy proxy.
+  Lifecycle локального strategy proxy и держатель native strategy engine.
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
-  Lifecycle-заготовка TUN transport. По умолчанию не вызывает `establish()`, пока userspace forwarder не подключен.
+  Lifecycle TUN transport guard. Сейчас не вызывает `establish()`, пока userspace forwarder не подключен.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
   In-memory snapshot store для Android runtime-состояния.
 

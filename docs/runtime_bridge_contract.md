@@ -16,7 +16,11 @@
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnService.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretAndroidRuntime.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyProfile.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetStore.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetVerifier.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/HostlistMatcher.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/L7Detectors.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimeEngine.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
@@ -87,12 +91,13 @@ enum ProxyRuntimeState { idle, starting, running, stopping, failed }
 
 - `idle` - runtime не активен и готов к следующему действию
 - `starting` - runtime находится в процессе запуска
-- `running` - Android foreground service и runtime skeleton активны
+- `running` - Android foreground service активен; детали готовности engine/forwarder смотрятся в snapshot flags
 - `stopping` - runtime находится в процессе остановки
 - `failed` - операция runtime завершилась ошибкой или runtime не может продолжать работу
 
-Важно: сейчас `running` на Android означает, что foreground `VpnService` и strategy runtime skeleton активны.
+Важно: сейчас `running` на Android означает, что foreground `VpnService` активен и native runtime прошел стартовый lifecycle.
 Это еще не означает, что TUN fd уже связан с production userspace forwarder и реальным socket proxy.
+Для этого в snapshot есть отдельный флаг `trafficForwarderReady`.
 
 ## Модели
 
@@ -151,8 +156,9 @@ Wire payload:
 }
 ```
 
-Текущий Android service читает эти значения, парсит `strategyProfile`, компилирует его в `StrategyRuntimePlan` и поднимает lifecycle skeleton для local proxy/TUN transport.
-По умолчанию `establishTunnel` равен `false`, чтобы skeleton не перехватывал весь трафик до подключения userspace forwarder.
+Текущий Android service читает эти значения, парсит `strategyProfile`, компилирует его в `StrategyRuntimePlan`, проверяет assets и поднимает local strategy proxy с native strategy engine.
+По умолчанию `establishTunnel` равен `false`, чтобы приложение не перехватывало весь трафик до подключения userspace forwarder.
+Если `establishTunnel` сейчас принудительно передать как `true`, Android layer все равно не вызывает `VpnService.Builder.establish()`, пока forwarder не wired.
 
 ### `StrategyProfile`
 
@@ -178,7 +184,7 @@ Wire payload:
 - `qnzapret/payloads/quic_initial_www_google_com.bin`
 
 Эти файлы лежат в `android/app/src/main/assets/qnzapret/` и попадают в APK как Android assets.
-`QnzapretAndroidRuntime` проверяет их наличие через `StrategyAssetVerifier` при старте skeleton и добавляет результат проверки в runtime message.
+`QnzapretAndroidRuntime` проверяет их наличие через `StrategyAssetVerifier`, загружает payload blobs через `StrategyAssetStore`, регистрирует lazy hostlist matchers и добавляет результат в runtime message/snapshot.
 
 Поддерживаемые Dart-модели:
 
@@ -195,6 +201,15 @@ Wire payload:
 - если домен, SNI, HTTP Host или QUIC target не найден в списках, local strategy proxy должен форвардить поток без fake/split/udpFake
 - `direct` означает обычный исходящий путь через Android protected socket, чтобы соединение не возвращалось обратно в VPN
 - отсутствие L7 host target на этапе детекта не должно само по себе блокировать поток; до появления отдельной политики блокировки безопасное поведение - direct forwarding
+
+Native strategy engine сейчас умеет:
+
+- лениво загружать hostlists из Android assets и матчить exact/suffix домены
+- загружать бинарные payload blobs по ключам `tls_google` и `quic_google`
+- детектить HTTP Host и TLS ClientHello SNI из первого payload chunk
+- распознавать базовый QUIC Initial marker, но без DNS/SNI correlation пока не применяет hostlist desync к QUIC, если host заранее неизвестен
+- возвращать `DIRECT` для unmatched traffic, missing host и неподдержанного протокола
+- возвращать `DESYNC` с resolved actions и payload bytes для matched HTTP/TLS правил
 
 Важно: эта модель намеренно описывает proxy/stream-oriented no-root subset.
 Она не обещает полную семантику `nfqws2`, raw TCP sequence tricks, TCP timestamp fooling (`ts`), TTL tricks или IP fragmentation.
@@ -213,6 +228,10 @@ Wire payload:
 - `backendConnected`
 - `vpnPermissionGranted`
 - `serviceActive`
+- `strategyEngineReady`
+- `trafficForwarderReady`
+- `tunnelActive`
+- `activeProfileName`
 
 Wire payload:
 
@@ -220,10 +239,14 @@ Wire payload:
 {
   'platform': 'android',
   'state': 'running',
-  'message': 'Android VPN strategy runtime skeleton is active.',
+  'message': 'Android VPN strategy engine is active.',
   'backendConnected': true,
   'vpnPermissionGranted': true,
   'serviceActive': true,
+  'strategyEngineReady': true,
+  'trafficForwarderReady': false,
+  'tunnelActive': false,
+  'activeProfileName': 'Default lightweight',
 }
 ```
 
@@ -232,6 +255,10 @@ Wire payload:
 - `backendConnected` сейчас означает, что platform bridge base доступен, а не что production userspace forwarder уже полностью обрабатывает трафик.
 - `vpnPermissionGranted` актуально для Android.
 - `serviceActive` отражает активность Android foreground service.
+- `strategyEngineReady` означает, что native strategy engine создан, payload blobs загружены, а hostlists зарегистрированы для lazy matching.
+- `trafficForwarderReady` означает, что TUN fd связан с userspace forwarding layer. Сейчас на Android остается `false`.
+- `tunnelActive` означает, что Android TUN fd реально установлен. Сейчас guard держит его `false`, пока forwarder не подключен.
+- `activeProfileName` дает UI человекочитаемое имя профиля, если runtime активен.
 - `message` должен быть пригоден для отображения в UI.
 
 ### `ProxyRuntimeController`
@@ -304,11 +331,11 @@ Android behavior:
 - требует уже выданного VPN permission
 - переводит store в `starting`
 - запускает `QnzapretVpnService` как foreground service
-- service парсит strategy profile, компилирует runtime plan и поднимает local proxy/TUN skeleton
+- service парсит strategy profile, компилирует runtime plan, проверяет assets и поднимает local strategy proxy с native strategy engine
 - service проверяет наличие hostlists и payload blobs в Android assets
-- service переводит store в `running`, если skeleton успешно поднят
+- service переводит store в `running`, если strategy engine успешно поднят
 - если foreground service не удалось запустить, bridge возвращает `vpn_start_failed` и store получает `failed`
-- если skeleton внутри service упал при старте, service переводит store в `failed` и останавливается
+- если runtime внутри service упал при старте, service переводит store в `failed` и останавливается
 
 Возможная native error:
 
@@ -378,7 +405,7 @@ Native return values:
 3. Если permission есть, store получает `starting`.
 4. Foreground `QnzapretVpnService` стартует.
 5. Service получает config, компилирует strategy profile и проверяет Android assets.
-6. Service стартует local proxy/TUN skeleton.
+6. Service стартует local strategy proxy, загружает strategy engine и удерживает TUN выключенным до появления userspace forwarder.
 7. Runtime message отражает `unmatchedTrafficPolicy`, чтобы было видно, что трафик вне hostlists не должен попадать под desync.
 8. Service переводит store в `running`.
 9. `getSnapshot()` возвращает актуальное состояние.

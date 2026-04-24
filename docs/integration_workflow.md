@@ -56,7 +56,11 @@
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnService.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretAndroidRuntime.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetStore.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetVerifier.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/HostlistMatcher.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/L7Detectors.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimeEngine.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyProfile.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
@@ -121,6 +125,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - `getSnapshot()` после старта должен показать `running` и `serviceActive`
 - snapshot/message после старта должен отражать выбранный strategy profile
 - snapshot/message после старта должен отражать наличие или отсутствие нужных strategy assets
+- snapshot после старта должен различать `strategyEngineReady`, `trafficForwarderReady` и `tunnelActive`
 - домен вне hostlists должен проходить direct forwarding без fake/split/udpFake действий
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
@@ -187,6 +192,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - ошибки permission/start/stop не ломают UI
 - strategy profile передается из Dart в Android bridge
 - hostlists и payload blobs дефолтной стратегии упакованы в Android assets
+- native strategy engine загружает payload blobs, регистрирует hostlists и возвращает direct/desync decisions
 - hostlists используются как включение desync-правил, а unmatched traffic сохраняет политику `direct`
 - local strategy proxy и TUN transport подключены за Android service
 - userspace forwarder передает трафик из TUN fd в локальный strategy proxy
@@ -194,9 +200,9 @@ Backend реализует platform adapter так, чтобы наружу он
 
 ## Предлагаемый порядок следующих задач
 
-1. Уточнить различие между Android service skeleton и fully connected userspace forwarding.
-2. Реализовать userspace forwarder между TUN fd и local strategy proxy.
-3. Наполнить local strategy proxy HTTP/TLS/QUIC detectors, hostlists и split/fake actions.
+1. Реализовать userspace forwarder между TUN fd и local strategy proxy.
+2. Подключить `StrategyRuntimeEngine.evaluate()` к stream/datagram forwarding.
+3. Реализовать безопасное применение split/fake/udpFake действий в рамках no-root возможностей.
 4. Добавить production log stream поверх текущего `ProxyRuntimeController`.
-5. Расширить `ProxyRuntimeSnapshot`, если нужен отдельный статус native backend.
+5. Расширить diagnostics snapshot, если UI понадобится больше runtime health-полей.
 6. После Android описать equivalent bridge strategy для Linux и Windows.

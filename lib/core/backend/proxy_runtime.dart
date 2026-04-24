@@ -299,6 +299,10 @@ class ProxyRuntimeSnapshot {
     required this.backendConnected,
     required this.vpnPermissionGranted,
     required this.serviceActive,
+    required this.strategyEngineReady,
+    required this.trafficForwarderReady,
+    required this.tunnelActive,
+    this.activeProfileName,
   });
 
   final ProxyPlatform platform;
@@ -307,6 +311,10 @@ class ProxyRuntimeSnapshot {
   final bool backendConnected;
   final bool vpnPermissionGranted;
   final bool serviceActive;
+  final bool strategyEngineReady;
+  final bool trafficForwarderReady;
+  final bool tunnelActive;
+  final String? activeProfileName;
 
   factory ProxyRuntimeSnapshot.initial(ProxyPlatform platform) {
     return ProxyRuntimeSnapshot(
@@ -316,10 +324,14 @@ class ProxyRuntimeSnapshot {
       backendConnected: false,
       vpnPermissionGranted: false,
       serviceActive: false,
+      strategyEngineReady: false,
+      trafficForwarderReady: false,
+      tunnelActive: false,
     );
   }
 
   factory ProxyRuntimeSnapshot.fromMap(Map<Object?, Object?> map) {
+    final activeProfileName = map['activeProfileName'] as String?;
     return ProxyRuntimeSnapshot(
       platform: _parsePlatform(map['platform'] as String?),
       state: _parseRuntimeState(map['state'] as String?),
@@ -327,6 +339,12 @@ class ProxyRuntimeSnapshot {
       backendConnected: map['backendConnected'] as bool? ?? false,
       vpnPermissionGranted: map['vpnPermissionGranted'] as bool? ?? false,
       serviceActive: map['serviceActive'] as bool? ?? false,
+      strategyEngineReady: map['strategyEngineReady'] as bool? ?? false,
+      trafficForwarderReady: map['trafficForwarderReady'] as bool? ?? false,
+      tunnelActive: map['tunnelActive'] as bool? ?? false,
+      activeProfileName: (activeProfileName?.isEmpty ?? true)
+          ? null
+          : activeProfileName,
     );
   }
 
@@ -337,6 +355,10 @@ class ProxyRuntimeSnapshot {
     bool? backendConnected,
     bool? vpnPermissionGranted,
     bool? serviceActive,
+    bool? strategyEngineReady,
+    bool? trafficForwarderReady,
+    bool? tunnelActive,
+    String? activeProfileName,
   }) {
     return ProxyRuntimeSnapshot(
       platform: platform ?? this.platform,
@@ -345,6 +367,11 @@ class ProxyRuntimeSnapshot {
       backendConnected: backendConnected ?? this.backendConnected,
       vpnPermissionGranted: vpnPermissionGranted ?? this.vpnPermissionGranted,
       serviceActive: serviceActive ?? this.serviceActive,
+      strategyEngineReady: strategyEngineReady ?? this.strategyEngineReady,
+      trafficForwarderReady:
+          trafficForwarderReady ?? this.trafficForwarderReady,
+      tunnelActive: tunnelActive ?? this.tunnelActive,
+      activeProfileName: activeProfileName ?? this.activeProfileName,
     );
   }
 }
@@ -384,6 +411,9 @@ final class StubProxyRuntime implements ProxyRuntime {
       backendConnected: false,
       vpnPermissionGranted: false,
       serviceActive: false,
+      strategyEngineReady: false,
+      trafficForwarderReady: false,
+      tunnelActive: false,
     );
   }
 

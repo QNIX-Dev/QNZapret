@@ -15,6 +15,10 @@ internal object QnzapretVpnRuntimeStore {
     private var backendConnected: Boolean = true
     private var vpnPermissionGranted: Boolean = false
     private var serviceActive: Boolean = false
+    private var strategyEngineReady: Boolean = false
+    private var trafficForwarderReady: Boolean = false
+    private var tunnelActive: Boolean = false
+    private var activeProfileName: String = ""
 
     @Synchronized
     fun snapshot(context: Context): Map<String, Any> {
@@ -30,6 +34,10 @@ internal object QnzapretVpnRuntimeStore {
             "backendConnected" to backendConnected,
             "vpnPermissionGranted" to vpnPermissionGranted,
             "serviceActive" to serviceActive,
+            "strategyEngineReady" to strategyEngineReady,
+            "trafficForwarderReady" to trafficForwarderReady,
+            "tunnelActive" to tunnelActive,
+            "activeProfileName" to activeProfileName,
         )
     }
 
@@ -38,6 +46,7 @@ internal object QnzapretVpnRuntimeStore {
         vpnPermissionGranted = granted
         state = RuntimeState.IDLE
         serviceActive = false
+        clearRuntimeDetails()
         message = if (granted) {
             "VPN permission granted. Android strategy runtime is ready to start."
         } else {
@@ -50,13 +59,24 @@ internal object QnzapretVpnRuntimeStore {
     fun markStarting(newMessage: String) {
         state = RuntimeState.STARTING
         serviceActive = true
+        clearRuntimeDetails()
         message = newMessage
     }
 
     @Synchronized
-    fun markRunning(newMessage: String) {
+    fun markRunning(
+        newMessage: String,
+        newStrategyEngineReady: Boolean = false,
+        newTrafficForwarderReady: Boolean = false,
+        newTunnelActive: Boolean = false,
+        newActiveProfileName: String = "",
+    ) {
         state = RuntimeState.RUNNING
         serviceActive = true
+        strategyEngineReady = newStrategyEngineReady
+        trafficForwarderReady = newTrafficForwarderReady
+        tunnelActive = newTunnelActive
+        activeProfileName = newActiveProfileName
         message = newMessage
     }
 
@@ -72,6 +92,7 @@ internal object QnzapretVpnRuntimeStore {
         syncPermission(context)
         state = RuntimeState.IDLE
         serviceActive = false
+        clearRuntimeDetails()
         message = newMessage ?: idleMessage()
     }
 
@@ -79,6 +100,7 @@ internal object QnzapretVpnRuntimeStore {
     fun markFailed(newMessage: String) {
         state = RuntimeState.FAILED
         serviceActive = false
+        clearRuntimeDetails()
         message = newMessage
     }
 
@@ -89,6 +111,13 @@ internal object QnzapretVpnRuntimeStore {
 
     private fun idleMessage(): String {
         return if (vpnPermissionGranted) IDLE_READY_MESSAGE else IDLE_PREPARE_MESSAGE
+    }
+
+    private fun clearRuntimeDetails() {
+        strategyEngineReady = false
+        trafficForwarderReady = false
+        tunnelActive = false
+        activeProfileName = ""
     }
 
     private enum class RuntimeState(val wireValue: String) {

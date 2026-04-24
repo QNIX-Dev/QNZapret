@@ -73,6 +73,10 @@ void main() {
       'backendConnected': true,
       'vpnPermissionGranted': true,
       'serviceActive': true,
+      'strategyEngineReady': true,
+      'trafficForwarderReady': false,
+      'tunnelActive': false,
+      'activeProfileName': 'Default lightweight',
     });
 
     expect(snapshot.platform, ProxyPlatform.android);
@@ -81,6 +85,10 @@ void main() {
     expect(snapshot.backendConnected, isTrue);
     expect(snapshot.vpnPermissionGranted, isTrue);
     expect(snapshot.serviceActive, isTrue);
+    expect(snapshot.strategyEngineReady, isTrue);
+    expect(snapshot.trafficForwarderReady, isFalse);
+    expect(snapshot.tunnelActive, isFalse);
+    expect(snapshot.activeProfileName, 'Default lightweight');
   });
 
   test('prepare result parses native response', () {

@@ -25,7 +25,7 @@ Android-направление строится как no-root VPN/proxy runtime
 
 ## Текущая стадия
 
-Проект находится на стадии брендированного frontend shell с начатой Android runtime-интеграцией.
+Проект находится на стадии брендированного frontend shell с Android runtime-интеграцией, доведенной до native strategy engine.
 
 Что уже есть:
 
@@ -42,10 +42,12 @@ Android-направление строится как no-root VPN/proxy runtime
 - `AndroidProxyRuntime` как Dart-адаптер поверх `MethodChannel`
 - Android bridge в `ProxyRuntimeBridge.kt`
 - Android VPN foreground service в `QnzapretVpnService.kt`
-- Android strategy runtime skeleton в `QnzapretAndroidRuntime.kt`
-- Android local proxy/TUN lifecycle заготовки в `LocalStrategyProxy.kt` и `TunTransport.kt`
+- Android strategy runtime coordinator в `QnzapretAndroidRuntime.kt`
+- Android local strategy proxy lifecycle в `LocalStrategyProxy.kt`
+- native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
+- TUN lifecycle guard в `TunTransport.kt`, который не включает VPN-перехват до подключения userspace forwarder
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
-- проверка наличия strategy assets на старте skeleton через `StrategyAssetVerifier.kt`
+- проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
 - базовые тесты сериализации и парсинга runtime-моделей
 
@@ -53,7 +55,8 @@ Android-направление строится как no-root VPN/proxy runtime
 
 - userspace forwarder между TUN fd и локальным strategy proxy
 - реальная socket/proxy implementation для HTTP/TLS/QUIC потоков
-- production чтение payload assets и hostlists внутри local strategy proxy
+- userspace TCP/IP или tun2socks-like слой, который связывает TUN fd с local strategy proxy
+- применение split/fake/udpFake decisions к реальному stream/datagram forwarding
 - поток логов из backend
 - desktop bridge implementations для Linux и Windows
 - полноценные runtime-контролы, пресеты и профили стратегий
@@ -66,7 +69,7 @@ Android-направление строится как no-root VPN/proxy runtime
 
 Android target path:
 
-`Android VpnService -> TUN transport -> local strategy proxy -> protected sockets`
+`Android VpnService -> TUN transport -> userspace forwarder -> local strategy proxy -> protected sockets`
 
 Hostlists в strategy profile трактуются как списки включения DPI-bypass действий.
 Если поток не совпал со списками, production local strategy proxy должен пропускать его напрямую через protected socket без fake/split действий.
@@ -128,6 +131,6 @@ Composition root уже передает в экран `createDefaultProxyRuntim
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
 1. реализовать userspace forwarder между TUN fd и локальным strategy proxy;
-2. наполнить local strategy proxy HTTP/TLS/QUIC detectors, hostlists, split/fake actions и payload assets;
+2. подключить decisions из native strategy engine к реальному stream/datagram forwarding;
 3. добавить production log stream поверх текущего controller/snapshot слоя;
 4. после Android закрепить equivalent contract для Linux и Windows.
