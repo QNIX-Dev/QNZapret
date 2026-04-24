@@ -186,7 +186,7 @@ class _LogsHero extends StatelessWidget {
                 children: [
                   Expanded(
                     flex: 6,
-                    child: _LogsHeroText(
+                    child: _LogsHeroDetails(
                       runtimeView: runtimeView,
                       onOpenSettings: onOpenSettings,
                     ),
@@ -198,12 +198,11 @@ class _LogsHero extends StatelessWidget {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _LogsHeroText(
-                    runtimeView: runtimeView,
-                    onOpenSettings: onOpenSettings,
-                  ),
+                  _LogsHeroHeader(onOpenSettings: onOpenSettings),
                   const SizedBox(height: AppSpacing.lg),
                   const TerminalIllustration(compact: true),
+                  const SizedBox(height: AppSpacing.lg),
+                  _LogFacts(runtimeView: runtimeView, centered: true),
                 ],
               ),
       ),
@@ -211,13 +210,53 @@ class _LogsHero extends StatelessWidget {
   }
 }
 
-class _LogsHeroText extends StatelessWidget {
-  const _LogsHeroText({
+class _LogsHeroDetails extends StatelessWidget {
+  const _LogsHeroDetails({
     required this.runtimeView,
     required this.onOpenSettings,
   });
+
   final RuntimeViewState runtimeView;
   final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: _SettingsButton(onOpenSettings: onOpenSettings),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        const _LogsHeroTitle(),
+        const SizedBox(height: AppSpacing.lg),
+        _LogFacts(runtimeView: runtimeView, centered: false),
+      ],
+    );
+  }
+}
+
+class _LogsHeroHeader extends StatelessWidget {
+  const _LogsHeroHeader({required this.onOpenSettings});
+
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Expanded(child: _LogsHeroTitle()),
+        const SizedBox(width: AppSpacing.md),
+        _SettingsButton(onOpenSettings: onOpenSettings),
+      ],
+    );
+  }
+}
+
+class _LogsHeroTitle extends StatelessWidget {
+  const _LogsHeroTitle();
 
   @override
   Widget build(BuildContext context) {
@@ -227,52 +266,67 @@ class _LogsHeroText extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Логи', style: theme.textTheme.displayMedium),
-                  const SizedBox(height: AppSpacing.xs),
-                  Text(
-                    'Здесь появляются последние сообщения сервисов.',
-                    style: theme.textTheme.bodyLarge?.copyWith(
-                      color: extras.mutedForeground,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            IconButton(
-              tooltip: 'Настройки',
-              onPressed: () {
-                HapticFeedback.selectionClick();
-                onOpenSettings();
-              },
-              icon: const Icon(Icons.tune_rounded),
-            ),
-          ],
-        ),
-        const SizedBox(height: AppSpacing.lg),
-        Wrap(
-          spacing: AppSpacing.sm,
-          runSpacing: AppSpacing.sm,
-          children: [
-            _LogFact(title: '${runtimeView.logs.length}', subtitle: 'строк'),
-            _LogFact(
-              title: runtimeView.autoScrollEnabled ? 'Включена' : 'Пауза',
-              subtitle: 'прокрутка',
-            ),
-            _LogFact(
-              title: runtimeView.runtime.summaryStatus.label,
-              subtitle: 'состояние',
-            ),
-          ],
+        Text('Логи', style: theme.textTheme.displayMedium),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'Здесь появляются последние сообщения сервисов.',
+          style: theme.textTheme.bodyLarge?.copyWith(
+            color: extras.mutedForeground,
+          ),
         ),
       ],
+    );
+  }
+}
+
+class _LogFacts extends StatelessWidget {
+  const _LogFacts({required this.runtimeView, required this.centered});
+
+  final RuntimeViewState runtimeView;
+  final bool centered;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: centered ? Alignment.center : Alignment.centerLeft,
+      child: Wrap(
+        key: ValueKey(
+          centered ? 'logs-hero-facts-centered' : 'logs-hero-facts-start',
+        ),
+        alignment: centered ? WrapAlignment.center : WrapAlignment.start,
+        runAlignment: centered ? WrapAlignment.center : WrapAlignment.start,
+        spacing: AppSpacing.sm,
+        runSpacing: AppSpacing.sm,
+        children: [
+          _LogFact(title: '${runtimeView.logs.length}', subtitle: 'строк'),
+          _LogFact(
+            title: runtimeView.autoScrollEnabled ? 'Включена' : 'Пауза',
+            subtitle: 'прокрутка',
+          ),
+          _LogFact(
+            title: runtimeView.runtime.summaryStatus.label,
+            subtitle: 'состояние',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsButton extends StatelessWidget {
+  const _SettingsButton({required this.onOpenSettings});
+
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Настройки',
+      onPressed: () {
+        HapticFeedback.selectionClick();
+        onOpenSettings();
+      },
+      icon: const Icon(Icons.tune_rounded),
     );
   }
 }
