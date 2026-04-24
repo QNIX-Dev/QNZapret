@@ -45,7 +45,9 @@ Android-направление строится как no-root VPN/proxy runtime
 - Android strategy runtime coordinator в `QnzapretAndroidRuntime.kt`
 - Android local strategy proxy lifecycle в `LocalStrategyProxy.kt`
 - native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
-- TUN lifecycle guard в `TunTransport.kt`, который не включает VPN-перехват до подключения userspace forwarder
+- IPv4/UDP packet codec в `IpPacketCodec.kt`
+- userspace forwarder core в `TunPacketForwarder.kt` с UDP relay через protected `DatagramSocket`
+- TUN lifecycle guard в `TunTransport.kt`, который не включает VPN-перехват до готовности полного TCP/UDP forwarder
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
@@ -53,10 +55,10 @@ Android-направление строится как no-root VPN/proxy runtime
 
 Что еще не подключено:
 
-- userspace forwarder между TUN fd и локальным strategy proxy
 - реальная socket/proxy implementation для HTTP/TLS/QUIC потоков
-- userspace TCP/IP или tun2socks-like слой, который связывает TUN fd с local strategy proxy
-- применение split/fake/udpFake decisions к реальному stream/datagram forwarding
+- TCP userspace relay/state machine между TUN fd и protected sockets
+- безопасное применение split/fake decisions к TCP stream forwarding
+- QUIC host correlation для применения `udpFake` не только при заранее известном host target
 - поток логов из backend
 - desktop bridge implementations для Linux и Windows
 - полноценные runtime-контролы, пресеты и профили стратегий
@@ -130,7 +132,7 @@ Composition root уже передает в экран `createDefaultProxyRuntim
 
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
-1. реализовать userspace forwarder между TUN fd и локальным strategy proxy;
-2. подключить decisions из native strategy engine к реальному stream/datagram forwarding;
+1. реализовать TCP userspace relay/state machine между TUN fd и protected sockets;
+2. подключить TCP split actions и QUIC host correlation к существующему strategy engine;
 3. добавить production log stream поверх текущего controller/snapshot слоя;
 4. после Android закрепить equivalent contract для Linux и Windows.

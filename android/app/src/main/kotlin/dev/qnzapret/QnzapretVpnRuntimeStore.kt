@@ -18,6 +18,9 @@ internal object QnzapretVpnRuntimeStore {
     private var strategyEngineReady: Boolean = false
     private var trafficForwarderReady: Boolean = false
     private var tunnelActive: Boolean = false
+    private var packetCodecReady: Boolean = false
+    private var udpForwarderReady: Boolean = false
+    private var tcpForwarderReady: Boolean = false
     private var activeProfileName: String = ""
 
     @Synchronized
@@ -37,6 +40,9 @@ internal object QnzapretVpnRuntimeStore {
             "strategyEngineReady" to strategyEngineReady,
             "trafficForwarderReady" to trafficForwarderReady,
             "tunnelActive" to tunnelActive,
+            "packetCodecReady" to packetCodecReady,
+            "udpForwarderReady" to udpForwarderReady,
+            "tcpForwarderReady" to tcpForwarderReady,
             "activeProfileName" to activeProfileName,
         )
     }
@@ -69,6 +75,9 @@ internal object QnzapretVpnRuntimeStore {
         newStrategyEngineReady: Boolean = false,
         newTrafficForwarderReady: Boolean = false,
         newTunnelActive: Boolean = false,
+        newPacketCodecReady: Boolean = false,
+        newUdpForwarderReady: Boolean = false,
+        newTcpForwarderReady: Boolean = false,
         newActiveProfileName: String = "",
     ) {
         state = RuntimeState.RUNNING
@@ -76,6 +85,9 @@ internal object QnzapretVpnRuntimeStore {
         strategyEngineReady = newStrategyEngineReady
         trafficForwarderReady = newTrafficForwarderReady
         tunnelActive = newTunnelActive
+        packetCodecReady = newPacketCodecReady
+        udpForwarderReady = newUdpForwarderReady
+        tcpForwarderReady = newTcpForwarderReady
         activeProfileName = newActiveProfileName
         message = newMessage
     }
@@ -117,6 +129,9 @@ internal object QnzapretVpnRuntimeStore {
         strategyEngineReady = false
         trafficForwarderReady = false
         tunnelActive = false
+        packetCodecReady = false
+        udpForwarderReady = false
+        tcpForwarderReady = false
         activeProfileName = ""
     }
 

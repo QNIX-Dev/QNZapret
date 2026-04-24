@@ -7,39 +7,85 @@ import java.io.IOException
 internal data class TunTransportState(
     val active: Boolean,
     val forwarderReady: Boolean,
+    val packetCodecReady: Boolean,
+    val udpForwarderReady: Boolean,
+    val tcpForwarderReady: Boolean,
     val message: String,
 )
 
 internal class TunTransport(
     private val service: VpnService,
+    private val localProxy: LocalStrategyProxy,
 ) {
     private var descriptor: ParcelFileDescriptor? = null
+    private var forwarder: TunPacketForwarder? = null
 
     fun start(
         config: VpnRuntimeConfig,
         proxyEndpoint: LocalStrategyProxyEndpoint,
     ): TunTransportState {
+        val capabilities = TunPacketForwarder.CAPABILITIES
         if (!config.establishTunnel) {
             return TunTransportState(
                 active = false,
-                forwarderReady = false,
-                message = "TUN establishment is deferred until the userspace forwarder is wired.",
+                forwarderReady = capabilities.fullyReady,
+                packetCodecReady = capabilities.packetCodecReady,
+                udpForwarderReady = capabilities.udpForwarderReady,
+                tcpForwarderReady = capabilities.tcpForwarderReady,
+                message = "TUN establishment is deferred. Packet codec and UDP relay are ready; TCP relay is pending.",
             )
         }
 
+        if (!capabilities.fullyReady) {
+            return TunTransportState(
+                active = false,
+                forwarderReady = false,
+                packetCodecReady = capabilities.packetCodecReady,
+                udpForwarderReady = capabilities.udpForwarderReady,
+                tcpForwarderReady = capabilities.tcpForwarderReady,
+                message = "TUN establishment was requested for local proxy " +
+                    "${proxyEndpoint.host}:${proxyEndpoint.port}, but TCP relay is pending.",
+            )
+        }
+
+        val nextDescriptor = establishTunnel(config)
+            ?: return TunTransportState(
+                active = false,
+                forwarderReady = false,
+                packetCodecReady = capabilities.packetCodecReady,
+                udpForwarderReady = capabilities.udpForwarderReady,
+                tcpForwarderReady = capabilities.tcpForwarderReady,
+                message = "Android returned no TUN fd for the requested VPN session.",
+            )
+
+        descriptor = nextDescriptor
+        val nextForwarder = TunPacketForwarder(
+            service = service,
+            localProxy = localProxy,
+            descriptor = nextDescriptor,
+            mtu = config.tunnelMtu,
+        )
+        val forwarderStatus = nextForwarder.start()
+        forwarder = nextForwarder
+
         return TunTransportState(
-            active = false,
-            forwarderReady = false,
-            message = "TUN establishment was requested for local proxy " +
-                "${proxyEndpoint.host}:${proxyEndpoint.port}, but the userspace forwarder is not wired yet.",
+            active = true,
+            forwarderReady = forwarderStatus.capabilities.fullyReady,
+            packetCodecReady = forwarderStatus.capabilities.packetCodecReady,
+            udpForwarderReady = forwarderStatus.capabilities.udpForwarderReady,
+            tcpForwarderReady = forwarderStatus.capabilities.tcpForwarderReady,
+            message = "TUN fd established for local proxy ${proxyEndpoint.host}:${proxyEndpoint.port}. " +
+                forwarderStatus.message,
         )
     }
 
     fun stop() {
         try {
+            forwarder?.stop()
             descriptor?.close()
         } catch (_: IOException) {
         } finally {
+            forwarder = null
             descriptor = null
         }
     }

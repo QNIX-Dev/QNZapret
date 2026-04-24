@@ -76,6 +76,9 @@ void main() {
       'strategyEngineReady': true,
       'trafficForwarderReady': false,
       'tunnelActive': false,
+      'packetCodecReady': true,
+      'udpForwarderReady': true,
+      'tcpForwarderReady': false,
       'activeProfileName': 'Default lightweight',
     });
 
@@ -88,6 +91,9 @@ void main() {
     expect(snapshot.strategyEngineReady, isTrue);
     expect(snapshot.trafficForwarderReady, isFalse);
     expect(snapshot.tunnelActive, isFalse);
+    expect(snapshot.packetCodecReady, isTrue);
+    expect(snapshot.udpForwarderReady, isTrue);
+    expect(snapshot.tcpForwarderReady, isFalse);
     expect(snapshot.activeProfileName, 'Default lightweight');
   });
 

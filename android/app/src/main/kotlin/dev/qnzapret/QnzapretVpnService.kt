@@ -59,6 +59,11 @@ class QnzapretVpnService : VpnService() {
             )
             append(" TCP ports: ${startResult.plan.tcpPorts.sorted().joinToString()}.")
             append(" UDP ports: ${startResult.plan.udpPorts.sorted().joinToString()}.")
+            append(
+                " Forwarder: IPv4 codec=${startResult.tunState.packetCodecReady}, " +
+                    "UDP=${startResult.tunState.udpForwarderReady}, " +
+                    "TCP=${startResult.tunState.tcpForwarderReady}.",
+            )
             if (startResult.plan.requiredBlobKeys.isNotEmpty()) {
                 append(" Payload blobs: ${startResult.plan.requiredBlobKeys.sorted().joinToString()}.")
             }
@@ -77,6 +82,9 @@ class QnzapretVpnService : VpnService() {
             newStrategyEngineReady = startResult.proxyStatus.engineReady,
             newTrafficForwarderReady = startResult.tunState.forwarderReady,
             newTunnelActive = startResult.tunState.active,
+            newPacketCodecReady = startResult.tunState.packetCodecReady,
+            newUdpForwarderReady = startResult.tunState.udpForwarderReady,
+            newTcpForwarderReady = startResult.tunState.tcpForwarderReady,
             newActiveProfileName = startResult.plan.profileName,
         )
         return START_NOT_STICKY

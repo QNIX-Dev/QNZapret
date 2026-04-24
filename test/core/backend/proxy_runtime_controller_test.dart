@@ -15,6 +15,9 @@ void main() {
         strategyEngineReady: false,
         trafficForwarderReady: false,
         tunnelActive: false,
+        packetCodecReady: false,
+        udpForwarderReady: false,
+        tcpForwarderReady: false,
       ),
     );
     final controller = ProxyRuntimeController(runtime: runtime);
@@ -45,6 +48,9 @@ void main() {
           strategyEngineReady: false,
           trafficForwarderReady: false,
           tunnelActive: false,
+          packetCodecReady: false,
+          udpForwarderReady: false,
+          tcpForwarderReady: false,
         ),
       );
       final controller = ProxyRuntimeController(runtime: runtime);

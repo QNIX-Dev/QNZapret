@@ -45,8 +45,8 @@ class HomeScreen extends StatefulWidget {
   ];
 
   static const _nextMilestones = [
-    'wire Android TUN fd to the userspace forwarder',
-    'connect strategy decisions to stream/datagram forwarding',
+    'implement TCP userspace relay before enabling TUN default-route',
+    'connect split actions and QUIC host correlation to forwarding',
     'add runtime logs, connection presets, and desktop bridge contracts',
   ];
 
@@ -325,7 +325,7 @@ class _RuntimePanel extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            'Следующий логический слой: userspace forwarder между Android TUN fd, strategy decisions и protected sockets.',
+            'Следующий логический слой: TCP userspace relay между Android TUN fd, strategy decisions и protected sockets.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: AppTheme.inkSoft,
               height: 1.45,
