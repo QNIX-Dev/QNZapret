@@ -8,7 +8,7 @@ void main() {
       snapshot: const ProxyRuntimeSnapshot(
         platform: ProxyPlatform.android,
         state: ProxyRuntimeState.idle,
-        message: 'Ready',
+        message: 'Готово',
         backendConnected: true,
         vpnPermissionGranted: true,
         serviceActive: false,
@@ -26,12 +26,12 @@ void main() {
 
     addTearDown(controller.dispose);
 
-    expect(controller.snapshot.message, contains('not been loaded'));
+    expect(controller.snapshot.message, contains('еще не загружено'));
 
     final ok = await controller.initialize();
 
     expect(ok, isTrue);
-    expect(controller.snapshot.message, 'Ready');
+    expect(controller.snapshot.message, 'Готово');
     expect(controller.canStart, isTrue);
     expect(controller.needsPrepare, isFalse);
   });
@@ -43,7 +43,7 @@ void main() {
         snapshot: const ProxyRuntimeSnapshot(
           platform: ProxyPlatform.android,
           state: ProxyRuntimeState.idle,
-          message: 'Ready',
+          message: 'Готово',
           backendConnected: true,
           vpnPermissionGranted: true,
           serviceActive: false,
@@ -107,7 +107,7 @@ final class _FakeRuntime implements ProxyRuntime {
   @override
   Future<ProxyPrepareResult> prepare() async {
     _snapshot = _snapshot.copyWith(vpnPermissionGranted: true);
-    return const ProxyPrepareResult(granted: true, message: 'Prepared');
+    return const ProxyPrepareResult(granted: true, message: 'Подготовлено');
   }
 
   @override
@@ -120,7 +120,7 @@ final class _FakeRuntime implements ProxyRuntime {
     startedConfig = config;
     _snapshot = _snapshot.copyWith(
       state: ProxyRuntimeState.running,
-      message: 'Running',
+      message: 'Работает',
       serviceActive: true,
     );
   }
@@ -129,7 +129,7 @@ final class _FakeRuntime implements ProxyRuntime {
   Future<void> stop() async {
     _snapshot = _snapshot.copyWith(
       state: ProxyRuntimeState.idle,
-      message: 'Stopped',
+      message: 'Остановлено',
       serviceActive: false,
     );
   }

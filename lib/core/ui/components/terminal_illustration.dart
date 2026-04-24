@@ -140,9 +140,9 @@ class _TerminalIllustrationPainter extends CustomPainter {
     );
 
     final rows = <_IllustrationRow>[
-      _IllustrationRow('Runtime service', success, 0.72),
-      _IllustrationRow('Strategy engine', secondary, 0.58),
-      _IllustrationRow('Tunnel status', muted, 0.42),
+      _IllustrationRow('Сервис', success, 0.72),
+      _IllustrationRow('Ядро обхода', secondary, 0.58),
+      _IllustrationRow('Туннель', muted, 0.42),
     ];
 
     for (var i = 0; i < rows.length; i += 1) {

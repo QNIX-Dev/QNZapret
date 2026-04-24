@@ -269,7 +269,7 @@ class _LogsHeroTitle extends StatelessWidget {
         Text('Логи', style: theme.textTheme.displayMedium),
         const SizedBox(height: AppSpacing.xs),
         Text(
-          'Здесь появляются последние сообщения runtime.',
+          'Здесь появляются последние сообщения сервисов.',
           style: theme.textTheme.bodyLarge?.copyWith(
             color: extras.mutedForeground,
           ),

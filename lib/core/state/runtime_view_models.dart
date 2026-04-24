@@ -9,14 +9,14 @@ enum RuntimeLogSource { app, bridge, runtime }
 extension RuntimeLogSourceX on RuntimeLogSource {
   String get title => switch (this) {
     RuntimeLogSource.app => 'Интерфейс',
-    RuntimeLogSource.bridge => 'Bridge',
-    RuntimeLogSource.runtime => 'Runtime',
+    RuntimeLogSource.bridge => 'Мост',
+    RuntimeLogSource.runtime => 'Сервис',
   };
 
   String get shortTitle => switch (this) {
     RuntimeLogSource.app => 'UI',
-    RuntimeLogSource.bridge => 'Bridge',
-    RuntimeLogSource.runtime => 'Runtime',
+    RuntimeLogSource.bridge => 'Мост',
+    RuntimeLogSource.runtime => 'Сервис',
   };
 }
 
@@ -65,7 +65,7 @@ extension ProxyRuntimeStateUi on ProxyRuntimeState {
   String get label => switch (this) {
     ProxyRuntimeState.idle => 'Готов',
     ProxyRuntimeState.starting => 'Запуск',
-    ProxyRuntimeState.running => 'Service on',
+    ProxyRuntimeState.running => 'Работает',
     ProxyRuntimeState.stopping => 'Остановка',
     ProxyRuntimeState.failed => 'Сбой',
   };
@@ -101,10 +101,10 @@ extension ProxyRuntimeSnapshotUi on ProxyRuntimeSnapshot {
         return 'Туннель активен';
       }
       if (serviceActive && strategyEngineReady) {
-        return 'Engine ready';
+        return 'Ядро готово';
       }
       if (serviceActive) {
-        return 'Service on';
+        return 'Сервис активен';
       }
     }
 

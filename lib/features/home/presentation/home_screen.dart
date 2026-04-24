@@ -159,7 +159,7 @@ class _HeroTopBar extends StatelessWidget {
               Text(appDisplayName, style: theme.textTheme.displayMedium),
               const SizedBox(height: AppSpacing.xs),
               Text(
-                'Управление runtime и состояниями моста.',
+                'Запуск и остановка сервисов в одном месте.',
                 style: theme.textTheme.bodyLarge?.copyWith(
                   color: context.appThemeExtras.mutedForeground,
                 ),
@@ -266,25 +266,25 @@ class _HeroDetails extends StatelessWidget {
     }
 
     if (snapshot.tunnelActive && snapshot.trafficForwarderReady) {
-      return 'TUN и userspace forwarder активны.';
+      return 'Туннель и передача трафика активны.';
     }
 
     if (snapshot.state == ProxyRuntimeState.running &&
         snapshot.serviceActive &&
         !snapshot.tunnelActive) {
-      return 'Foreground service активен; туннель выключен текущей конфигурацией.';
+      return 'Системный сервис активен; туннель выключен текущей конфигурацией.';
     }
 
     if (snapshot.strategyEngineReady) {
-      return 'Strategy engine готов, готовность forwarder и tunnel показана отдельно.';
+      return 'Ядро обхода готово; готовность передачи и туннеля показана отдельно.';
     }
 
     return switch (snapshot.state) {
       ProxyRuntimeState.idle => null,
-      ProxyRuntimeState.starting => 'Запускаем runtime через adapter.',
-      ProxyRuntimeState.running => 'Runtime service активен.',
-      ProxyRuntimeState.stopping => 'Останавливаем runtime.',
-      ProxyRuntimeState.failed => 'Runtime сообщил сбой.',
+      ProxyRuntimeState.starting => 'Запускаем сервисы.',
+      ProxyRuntimeState.running => 'Сервис активен.',
+      ProxyRuntimeState.stopping => 'Останавливаем сервисы.',
+      ProxyRuntimeState.failed => 'Сервис сообщил сбой.',
     };
   }
 

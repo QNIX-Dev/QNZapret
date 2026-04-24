@@ -6,9 +6,9 @@ import android.net.VpnService
 internal object QnzapretVpnRuntimeStore {
     private const val PLATFORM = "android"
     private const val IDLE_READY_MESSAGE =
-        "Android VPN bridge is ready. Permission is granted and the service can be started."
+        "VPN-разрешение получено. Сервисы готовы к запуску."
     private const val IDLE_PREPARE_MESSAGE =
-        "Android VPN bridge is ready. User consent is required before starting the service."
+        "Перед запуском нужно разрешить VPN-подключение."
 
     private var state: RuntimeState = RuntimeState.IDLE
     private var message: String = IDLE_PREPARE_MESSAGE
@@ -58,9 +58,9 @@ internal object QnzapretVpnRuntimeStore {
         serviceActive = false
         clearRuntimeDetails()
         message = if (granted) {
-            "VPN permission granted. Android strategy runtime is ready to start."
+            "VPN-разрешение получено. Сервисы готовы к запуску."
         } else {
-            "VPN permission was denied. Service start remains blocked until consent is granted."
+            "VPN-разрешение отклонено. Запуск останется заблокированным до подтверждения."
         }
         return snapshot(context)
     }

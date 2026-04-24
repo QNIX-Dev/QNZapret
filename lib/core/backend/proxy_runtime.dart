@@ -330,7 +330,7 @@ class ProxyRuntimeSnapshot {
     return ProxyRuntimeSnapshot(
       platform: platform,
       state: ProxyRuntimeState.idle,
-      message: 'Runtime snapshot has not been loaded yet.',
+      message: 'Состояние сервиса еще не загружено.',
       backendConnected: false,
       vpnPermissionGranted: false,
       serviceActive: false,
@@ -429,7 +429,7 @@ final class StubProxyRuntime implements ProxyRuntime {
   Future<ProxyPrepareResult> prepare() async {
     return const ProxyPrepareResult(
       granted: false,
-      message: 'Native VPN preparation is not connected yet.',
+      message: 'Подготовка VPN пока недоступна на этой платформе.',
     );
   }
 
@@ -438,7 +438,7 @@ final class StubProxyRuntime implements ProxyRuntime {
     return ProxyRuntimeSnapshot(
       platform: platform,
       state: ProxyRuntimeState.idle,
-      message: 'Bridge for native strategy runtime is not connected yet.',
+      message: 'Нативный сервис пока не подключен на этой платформе.',
       backendConnected: false,
       vpnPermissionGranted: false,
       serviceActive: false,

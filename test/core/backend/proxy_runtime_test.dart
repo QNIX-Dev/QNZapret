@@ -104,10 +104,10 @@ void main() {
   test('prepare result parses native response', () {
     final result = ProxyPrepareResult.fromMap({
       'granted': true,
-      'message': 'VPN permission granted.',
+      'message': 'VPN-разрешение получено.',
     });
 
     expect(result.granted, isTrue);
-    expect(result.message, 'VPN permission granted.');
+    expect(result.message, 'VPN-разрешение получено.');
   });
 }

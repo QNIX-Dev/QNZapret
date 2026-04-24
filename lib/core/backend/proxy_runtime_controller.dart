@@ -14,7 +14,8 @@ final class ProxyRuntimeFailure {
     if (error is PlatformException) {
       return ProxyRuntimeFailure(
         code: error.code,
-        message: error.message ?? 'Platform runtime command failed.',
+        message:
+            error.message ?? 'Команда платформенного сервиса не выполнена.',
         details: error.details?.toString(),
       );
     }
@@ -22,7 +23,7 @@ final class ProxyRuntimeFailure {
     if (error is MissingPluginException) {
       return ProxyRuntimeFailure(
         code: 'missing_plugin',
-        message: error.message ?? 'Native runtime bridge is not registered.',
+        message: error.message ?? 'Нативный мост сервиса не зарегистрирован.',
       );
     }
 
@@ -139,7 +140,7 @@ final class ProxyRuntimeController extends ChangeNotifier {
     if (_busy) {
       _lastFailure = const ProxyRuntimeFailure(
         code: 'runtime_busy',
-        message: 'Runtime command is already in progress.',
+        message: 'Команда сервиса уже выполняется.',
       );
       _emit();
       return null;

@@ -112,7 +112,7 @@ class PremiumCtaButton extends StatelessWidget {
     if (runtimeView.isBusy) {
       final stopping = snapshot.state == ProxyRuntimeState.stopping;
       return _CtaViewModel(
-        title: stopping ? 'Остановка...' : 'Команда выполняется...',
+        title: stopping ? 'Останавливаем...' : 'Выполняем команду...',
         icon: stopping
             ? Icons.stop_circle_rounded
             : Icons.rocket_launch_rounded,
@@ -130,8 +130,8 @@ class PremiumCtaButton extends StatelessWidget {
       case ProxyRuntimeState.idle:
         return _CtaViewModel(
           title: runtimeView.needsPrepare
-              ? 'Подготовить runtime'
-              : 'Запустить runtime',
+              ? 'Разрешить запуск'
+              : 'Запустить сервисы',
           icon: runtimeView.needsPrepare
               ? Icons.verified_user_rounded
               : Icons.rocket_launch_rounded,
@@ -161,7 +161,7 @@ class PremiumCtaButton extends StatelessWidget {
         );
       case ProxyRuntimeState.running:
         return _CtaViewModel(
-          title: 'Остановить runtime',
+          title: 'Остановить сервисы',
           icon: Icons.stop_circle_rounded,
           foreground: theme.colorScheme.onError,
           loading: false,

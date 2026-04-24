@@ -84,34 +84,34 @@ class RuntimeViewState {
     return [
       RuntimeStatusItem(
         kind: RuntimeStatusKind.bridge,
-        title: 'Runtime bridge',
-        statusLabel: snapshot.backendConnected ? 'Connected' : 'Reserved',
+        title: 'Связь с системой',
+        statusLabel: snapshot.backendConnected ? 'Готова' : 'Ожидает',
         tone: snapshot.backendConnected
             ? RuntimeStatusTone.success
             : RuntimeStatusTone.neutral,
       ),
       RuntimeStatusItem(
         kind: RuntimeStatusKind.service,
-        title: 'Service lifecycle',
+        title: 'Сервис',
         statusLabel: snapshot.state == ProxyRuntimeState.running
-            ? 'Service active'
+            ? 'Активен'
             : snapshot.state.label,
         tone: snapshot.statusTone,
         animated: snapshot.isTransitioning || snapshot.serviceActive,
       ),
       RuntimeStatusItem(
         kind: RuntimeStatusKind.engine,
-        title: 'Strategy engine',
-        statusLabel: snapshot.strategyEngineReady ? 'Ready' : 'Waiting',
+        title: 'Ядро обхода',
+        statusLabel: snapshot.strategyEngineReady ? 'Готово' : 'Ожидает',
         tone: snapshot.strategyEngineReady
             ? RuntimeStatusTone.success
             : RuntimeStatusTone.neutral,
       ),
       RuntimeStatusItem(
         kind: RuntimeStatusKind.forwarder,
-        title: 'Forwarder',
+        title: 'Передача',
         statusLabel: snapshot.trafficForwarderReady
-            ? 'Linked to TUN'
+            ? 'Связана с TUN'
             : _capabilityLabel,
         tone: snapshot.trafficForwarderReady
             ? RuntimeStatusTone.success
@@ -123,8 +123,8 @@ class RuntimeViewState {
       ),
       RuntimeStatusItem(
         kind: RuntimeStatusKind.tunnel,
-        title: 'Tunnel',
-        statusLabel: snapshot.tunnelActive ? 'Active' : 'Off by config',
+        title: 'Туннель',
+        statusLabel: snapshot.tunnelActive ? 'Активен' : 'Выключен',
         tone: snapshot.tunnelActive
             ? RuntimeStatusTone.success
             : RuntimeStatusTone.neutral,
@@ -142,9 +142,9 @@ class RuntimeViewState {
     ].where((ready) => ready).length;
 
     if (readyCount == 0) {
-      return 'Waiting';
+      return 'Ожидает';
     }
-    return '$readyCount/5 capabilities';
+    return 'Готовность $readyCount/5';
   }
 
   RuntimeViewState copyWith({
@@ -224,7 +224,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       _emitLog(
         level: RuntimeLogLevel.system,
         source: RuntimeLogSource.bridge,
-        message: 'Snapshot обновлен.',
+        message: 'Состояние обновлено.',
       );
     } else {
       _emitFailure(controller.lastFailure);
@@ -241,8 +241,8 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       level: RuntimeLogLevel.system,
       source: RuntimeLogSource.app,
       message: state.needsPrepare
-          ? 'Запрашиваем подготовку runtime.'
-          : 'Передаем команду запуска runtime.',
+          ? 'Запрашиваем разрешение VPN.'
+          : 'Передаем команду запуска сервисов.',
     );
 
     if (state.needsPrepare) {
@@ -276,7 +276,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
     _emitLog(
       level: RuntimeLogLevel.system,
       source: RuntimeLogSource.runtime,
-      message: 'Команда запуска принята runtime adapter.',
+      message: 'Команда запуска принята системой.',
     );
     _emitSnapshotChanges(previous, controller.snapshot);
   }
@@ -290,7 +290,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
     _emitLog(
       level: RuntimeLogLevel.system,
       source: RuntimeLogSource.app,
-      message: 'Передаем команду остановки runtime.',
+      message: 'Передаем команду остановки сервисов.',
     );
 
     final previous = state.snapshot;
@@ -304,7 +304,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
     _emitLog(
       level: RuntimeLogLevel.system,
       source: RuntimeLogSource.runtime,
-      message: 'Runtime остановлен через adapter.',
+      message: 'Сервисы остановлены.',
     );
     _emitSnapshotChanges(previous, controller.snapshot);
   }
@@ -357,7 +357,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       _emitLog(
         level: next.hasFailure ? RuntimeLogLevel.error : RuntimeLogLevel.info,
         source: RuntimeLogSource.runtime,
-        message: 'Состояние runtime: ${next.honestStatusLabel}.',
+        message: 'Состояние сервиса: ${next.honestStatusLabel}.',
       );
     }
 
@@ -365,7 +365,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       _emitLog(
         level: RuntimeLogLevel.success,
         source: RuntimeLogSource.runtime,
-        message: 'Strategy engine готов.',
+        message: 'Ядро обхода готово.',
       );
     }
 
@@ -373,7 +373,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       _emitLog(
         level: RuntimeLogLevel.success,
         source: RuntimeLogSource.runtime,
-        message: 'Userspace forwarder связан с TUN.',
+        message: 'Передача трафика связана с TUN.',
       );
     }
 
@@ -381,7 +381,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       _emitLog(
         level: RuntimeLogLevel.success,
         source: RuntimeLogSource.runtime,
-        message: 'TUN fd активен.',
+        message: 'TUN-туннель активен.',
       );
     }
 
@@ -392,7 +392,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       _emitLog(
         level: RuntimeLogLevel.info,
         source: RuntimeLogSource.runtime,
-        message: 'Foreground service активен; туннель не поднят.',
+        message: 'Системный сервис активен; туннель не поднят.',
       );
     }
   }

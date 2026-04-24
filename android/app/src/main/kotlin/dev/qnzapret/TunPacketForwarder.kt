@@ -50,6 +50,7 @@ internal class TunPacketForwarder(
     private val outputLock = Any()
     private val udpSessions = ConcurrentHashMap<UdpFlowKey, UdpRelaySession>()
     private val tcpSessions = ConcurrentHashMap<TcpFlowKey, TcpRelaySession>()
+    private val quicHostCorrelation = QuicHostCorrelation()
     private val lastSessionCleanupAt = AtomicLong(0)
     private var readerThread: Thread? = null
     private var cleanupThread: Thread? = null
@@ -60,7 +61,7 @@ internal class TunPacketForwarder(
             return TunPacketForwarderStatus(
                 running = true,
                 capabilities = CAPABILITIES,
-                message = "TUN packet forwarder is already running.",
+                message = "Передача TUN-пакетов уже работает.",
             )
         }
 
@@ -77,7 +78,7 @@ internal class TunPacketForwarder(
         return TunPacketForwarderStatus(
             running = true,
             capabilities = CAPABILITIES,
-            message = "TUN packet forwarder started with IPv4/IPv6 TCP and UDP support.",
+            message = "Передача TUN-пакетов запущена с поддержкой IPv4/IPv6, TCP и UDP.",
         )
     }
 
@@ -147,11 +148,17 @@ internal class TunPacketForwarder(
 
     private fun forwardUdp(buffer: ByteArray, packet: IpPacket) {
         val datagram = IpPacketCodec.parseUdpDatagram(buffer, packet) ?: return
+        val knownHost = if (datagram.destinationPort == QUIC_HTTPS_PORT) {
+            quicHostCorrelation.lookupHost(datagram.destinationAddress)
+        } else {
+            null
+        }
         val decision = localProxy.evaluate(
             StrategyFlowProbe(
                 transport = StrategyTransport.UDP,
                 destinationPort = datagram.destinationPort,
                 payload = datagram.payload,
+                knownHost = knownHost,
             ),
         )
 
@@ -159,6 +166,7 @@ internal class TunPacketForwarder(
             UdpRelaySession(
                 service = service,
                 key = key,
+                hostCorrelation = quicHostCorrelation,
                 isRunning = { running.get() },
                 packetWriter = ::writePacketToTun,
                 onClosed = { udpSessions.remove(key) },
@@ -191,6 +199,7 @@ internal class TunPacketForwarder(
             val session = TcpRelaySession(
                 service = service,
                 localProxy = localProxy,
+                hostCorrelation = quicHostCorrelation,
                 key = key,
                 initialSegment = segment,
                 mtu = mtu,
@@ -269,6 +278,7 @@ internal class TunPacketForwarder(
         tcpSessions.values
             .filter { session -> session.isExpired(now) }
             .forEach(TcpRelaySession::close)
+        quicHostCorrelation.cleanupExpired(now)
     }
 
     private fun writePacketToTun(packet: ByteArray) {
@@ -328,6 +338,7 @@ internal class TunPacketForwarder(
     private class TcpRelaySession(
         private val service: VpnService,
         private val localProxy: LocalStrategyProxy,
+        private val hostCorrelation: QuicHostCorrelation,
         private val key: TcpFlowKey,
         private val initialSegment: TcpSegment,
         private val mtu: Int,
@@ -532,6 +543,7 @@ internal class TunPacketForwarder(
                     payload = payload,
                 ),
             )
+            rememberCorrelatedHost(decision)
             if (decision.kind != StrategyDecisionKind.DESYNC) {
                 return listOf(payload)
             }
@@ -543,6 +555,15 @@ internal class TunPacketForwarder(
                 }
             }
             return chunks
+        }
+
+        private fun rememberCorrelatedHost(decision: StrategyDecision) {
+            if (
+                decision.host != null &&
+                (decision.protocol == StrategyProtocol.HTTP || decision.protocol == StrategyProtocol.TLS)
+            ) {
+                hostCorrelation.rememberHost(key.destinationAddress, decision.host)
+            }
         }
 
         private fun splitChunks(chunks: List<ByteArray>, position: Int): List<ByteArray> {
@@ -696,6 +717,7 @@ internal class TunPacketForwarder(
     private class UdpRelaySession(
         private val service: VpnService,
         private val key: UdpFlowKey,
+        private val hostCorrelation: QuicHostCorrelation,
         private val isRunning: () -> Boolean,
         private val packetWriter: (ByteArray) -> Unit,
         private val onClosed: () -> Unit,
@@ -757,6 +779,9 @@ internal class TunPacketForwarder(
                         packet.offset,
                         packet.offset + packet.length,
                     )
+                    if (key.destinationPort == DNS_PORT) {
+                        hostCorrelation.observeDnsResponse(payload)
+                    }
                     touch()
                     val response = IpPacketCodec.buildUdpPacket(
                         ipVersion = key.ipVersion,
@@ -801,6 +826,8 @@ internal class TunPacketForwarder(
 
         private const val DEFAULT_PACKET_BUFFER_SIZE = 16_384
         private const val MAX_UDP_PACKET_SIZE = 65_507
+        private const val DNS_PORT = 53
+        private const val QUIC_HTTPS_PORT = 443
         private const val SESSION_CLEANUP_INTERVAL_MS = 30_000L
         private const val UDP_SESSION_IDLE_TIMEOUT_MS = 120_000L
         private const val TCP_SESSION_IDLE_TIMEOUT_MS = 120_000L

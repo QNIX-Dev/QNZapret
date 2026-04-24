@@ -36,7 +36,7 @@ internal class TunTransport(
                 ipv6PacketCodecReady = capabilities.ipv6PacketCodecReady,
                 ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
-                message = "TUN establishment is deferred. IPv4/IPv6 packet codec, UDP relay, and TCP relay are ready.",
+                message = "Поднятие TUN отложено конфигурацией. IPv4/IPv6 codec, UDP relay и TCP relay готовы.",
             )
         }
 
@@ -49,8 +49,8 @@ internal class TunTransport(
                 ipv6PacketCodecReady = capabilities.ipv6PacketCodecReady,
                 ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
-                message = "TUN establishment was requested for local proxy " +
-                    "${proxyEndpoint.host}:${proxyEndpoint.port}, but a required forwarder capability is unavailable.",
+                message = "Запрошен TUN для local proxy ${proxyEndpoint.host}:${proxyEndpoint.port}, " +
+                    "но часть возможностей передачи пока недоступна.",
             )
         }
 
@@ -63,7 +63,7 @@ internal class TunTransport(
                 ipv6PacketCodecReady = capabilities.ipv6PacketCodecReady,
                 ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
-                message = "Android returned no TUN fd for the requested VPN session.",
+                message = "Android не вернул TUN fd для запрошенной VPN-сессии.",
             )
 
         descriptor = nextDescriptor
@@ -84,7 +84,7 @@ internal class TunTransport(
             ipv6PacketCodecReady = forwarderStatus.capabilities.ipv6PacketCodecReady,
             ipv6UdpForwarderReady = forwarderStatus.capabilities.ipv6UdpForwarderReady,
             tcpForwarderReady = forwarderStatus.capabilities.tcpForwarderReady,
-            message = "TUN fd established for local proxy ${proxyEndpoint.host}:${proxyEndpoint.port}. " +
+            message = "TUN fd поднят для local proxy ${proxyEndpoint.host}:${proxyEndpoint.port}. " +
                 forwarderStatus.message,
         )
     }

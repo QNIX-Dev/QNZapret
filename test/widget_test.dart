@@ -20,8 +20,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('QNZapret'), findsOneWidget);
-    expect(find.text('Подготовить runtime'), findsOneWidget);
-    expect(find.text('Runtime bridge'), findsOneWidget);
+    expect(find.text('Разрешить запуск'), findsOneWidget);
+    expect(find.text('Связь с системой'), findsOneWidget);
+    expect(find.text('Сервис'), findsOneWidget);
+    expect(find.text('Ядро обхода'), findsOneWidget);
+    expect(find.text('Runtime bridge'), findsNothing);
+    expect(find.text('Запустить runtime'), findsNothing);
   });
 
   testWidgets('mobile settings opens as a page with top blocks visible', (
@@ -71,7 +75,7 @@ void main() {
 
     expect(find.text('Логи'), findsOneWidget);
     expect(
-      find.text('Здесь появляются последние сообщения runtime.'),
+      find.text('Здесь появляются последние сообщения сервисов.'),
       findsOneWidget,
     );
     expect(find.textContaining('строк'), findsWidgets);

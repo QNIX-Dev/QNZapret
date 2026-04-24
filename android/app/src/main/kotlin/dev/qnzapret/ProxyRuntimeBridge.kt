@@ -58,7 +58,7 @@ class ProxyRuntimeBridge(
         if (pendingPrepareResult != null) {
             result.error(
                 "vpn_prepare_in_progress",
-                "VPN permission request is already in progress.",
+                "Запрос VPN-разрешения уже открыт.",
                 null,
             )
             return
@@ -84,7 +84,7 @@ class ProxyRuntimeBridge(
         if (VpnService.prepare(context) != null) {
             result.error(
                 "vpn_permission_required",
-                "VPN permission must be granted before starting the Android runtime.",
+                "Перед запуском нужно разрешить VPN-подключение.",
                 null,
             )
             return
@@ -105,7 +105,7 @@ class ProxyRuntimeBridge(
         )
 
         QnzapretVpnRuntimeStore.markStarting(
-            "Starting Android strategy runtime on ${config.localHost}:${config.localPort}.",
+            "Запускаем сервис обхода на ${config.localHost}:${config.localPort}.",
         )
 
         try {
@@ -117,23 +117,23 @@ class ProxyRuntimeBridge(
         } catch (error: Exception) {
             val message = error.message ?: error.javaClass.simpleName
             QnzapretVpnRuntimeStore.markFailed(
-                "Failed to start Android strategy runtime service: $message.",
+                "Не удалось запустить сервис обхода: $message.",
             )
             result.error(
                 "vpn_start_failed",
-                "Failed to start Android strategy runtime service: $message.",
+                "Не удалось запустить сервис обхода: $message.",
                 null,
             )
         }
     }
 
     private fun handleStop(result: MethodChannel.Result) {
-        QnzapretVpnRuntimeStore.markStopping("Stopping Android strategy runtime.")
+        QnzapretVpnRuntimeStore.markStopping("Останавливаем сервис обхода.")
         val stopped = context.stopService(Intent(context, QnzapretVpnService::class.java))
         if (!stopped) {
             QnzapretVpnRuntimeStore.markIdle(
                 context,
-                "Android strategy runtime is already stopped.",
+                "Сервис обхода уже остановлен.",
             )
         }
         result.success(null)

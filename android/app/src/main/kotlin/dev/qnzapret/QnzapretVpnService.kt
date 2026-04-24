@@ -17,7 +17,7 @@ class QnzapretVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (VpnService.prepare(this) != null) {
             QnzapretVpnRuntimeStore.markFailed(
-                "VPN permission is missing. Prepare the service before starting it.",
+                "Нет VPN-разрешения. Перед запуском нужно подготовить сервис.",
             )
             stopSelf()
             return START_NOT_STICKY
@@ -34,46 +34,46 @@ class QnzapretVpnService : VpnService() {
             runtime?.stop()
             runtime = null
             QnzapretVpnRuntimeStore.markFailed(
-                "Android strategy runtime failed to start: ${error.message ?: error.javaClass.simpleName}.",
+                "Не удалось запустить сервис обхода: ${error.message ?: error.javaClass.simpleName}.",
             )
             stopSelf()
             return START_NOT_STICKY
         }
 
         val runtimeMessage = buildString {
-            append("Android VPN strategy engine is active.")
-            append(" Strategy: ${startResult.plan.profileName} (${startResult.plan.ruleCount} rules).")
-            append(" Unmatched traffic: ${startResult.plan.unmatchedTrafficPolicy.wireValue}.")
-            append(" Local proxy: ${startResult.proxyEndpoint.host}:${startResult.proxyEndpoint.port}.")
+            append("Ядро обхода активно.")
+            append(" Профиль: ${startResult.plan.profileName} (${startResult.plan.ruleCount} правил).")
+            append(" Остальной трафик: ${startResult.plan.unmatchedTrafficPolicy.wireValue}.")
+            append(" Локальный proxy: ${startResult.proxyEndpoint.host}:${startResult.proxyEndpoint.port}.")
             append(
-                " Engine assets: ${startResult.proxyStatus.hostlistCount} hostlists, " +
-                    "${startResult.proxyStatus.blobCount} blobs.",
+                " Данные стратегии: ${startResult.proxyStatus.hostlistCount} списков, " +
+                    "${startResult.proxyStatus.blobCount} payload-файлов.",
             )
             append(
-                " Protocols: ${
+                " Протоколы: ${
                     startResult.proxyStatus.supportedProtocols
                         .map { it.wireValue }
                         .sorted()
                         .joinToString()
                 }.",
             )
-            append(" TCP ports: ${startResult.plan.tcpPorts.sorted().joinToString()}.")
-            append(" UDP ports: ${startResult.plan.udpPorts.sorted().joinToString()}.")
+            append(" TCP-порты: ${startResult.plan.tcpPorts.sorted().joinToString()}.")
+            append(" UDP-порты: ${startResult.plan.udpPorts.sorted().joinToString()}.")
             append(
-                " Forwarder: packet codec=${startResult.tunState.packetCodecReady}, " +
+                " Передача: IPv4 codec=${startResult.tunState.packetCodecReady}, " +
                     "IPv6 codec=${startResult.tunState.ipv6PacketCodecReady}, " +
                     "UDP=${startResult.tunState.udpForwarderReady}, " +
                     "IPv6 UDP=${startResult.tunState.ipv6UdpForwarderReady}, " +
                     "TCP=${startResult.tunState.tcpForwarderReady}.",
             )
             if (startResult.plan.requiredBlobKeys.isNotEmpty()) {
-                append(" Payload blobs: ${startResult.plan.requiredBlobKeys.sorted().joinToString()}.")
+                append(" Payload-файлы: ${startResult.plan.requiredBlobKeys.sorted().joinToString()}.")
             }
             if (startResult.assetReport.isComplete) {
-                append(" Assets verified: ${startResult.assetReport.presentCount}.")
+                append(" Данные проверены: ${startResult.assetReport.presentCount}.")
             } else {
                 append(
-                    " Missing assets: ${startResult.assetReport.missingPaths.sorted().joinToString()}.",
+                    " Не найдены данные: ${startResult.assetReport.missingPaths.sorted().joinToString()}.",
                 )
             }
             append(" ${startResult.tunState.message}")
@@ -99,7 +99,7 @@ class QnzapretVpnService : VpnService() {
         runtime = null
         QnzapretVpnRuntimeStore.markIdle(
             this,
-            "Android VPN strategy runtime stopped. Bridge remains ready for the next start.",
+            "Сервис обхода остановлен. Система готова к следующему запуску.",
         )
         super.onDestroy()
     }
@@ -109,7 +109,7 @@ class QnzapretVpnService : VpnService() {
         runtime = null
         QnzapretVpnRuntimeStore.markIdle(
             this,
-            "VPN permission was revoked by the system. Prepare the service again before starting it.",
+            "Система отозвала VPN-разрешение. Перед новым запуском нужно разрешить VPN снова.",
         )
         stopSelf()
         super.onRevoke()
@@ -127,10 +127,10 @@ class QnzapretVpnService : VpnService() {
 
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
-            "QNZapret VPN runtime",
+            "QNZapret VPN",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Foreground notification for the Android VPN runtime base."
+            description = "Уведомление о работе VPN-сервиса QNZapret."
         }
 
         manager.createNotificationChannel(channel)
@@ -149,8 +149,8 @@ class QnzapretVpnService : VpnService() {
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("QNZapret runtime")
-            .setContentText("Android strategy engine is running.")
+            .setContentTitle("QNZapret работает")
+            .setContentText("Сервис обхода активен.")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)
