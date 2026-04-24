@@ -65,6 +65,7 @@
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
 
@@ -132,6 +133,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - при `establishTunnel=true` Android должен поднимать TUN fd только если TCP/UDP forwarder capabilities готовы
 - домен вне hostlists должен проходить direct forwarding без fake/split/udpFake действий
 - TCP hostlist match должен применять `split` как best-effort stream write split и не отправлять небезопасный TCP `fake` в protected socket mode
+- TCP relay должен игнорировать full duplicate retransmits, форвардить только новый tail при overlap retransmit, ACK/drop out-of-order payload без продвижения окна и чистить idle sessions
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
 
@@ -202,11 +204,12 @@ Backend реализует platform adapter так, чтобы наружу он
 - hostlists используются как включение desync-правил, а unmatched traffic сохраняет политику `direct`
 - local strategy proxy и TUN transport подключены за Android service
 - userspace forwarder передает трафик из TUN fd в локальный strategy proxy
+- Android JVM tests для TCP relay state и packet codec проходят через Gradle
 - `flutter analyze` и `flutter test` проходят
 
 ## Предлагаемый порядок следующих задач
 
-1. Захарднить TCP userspace relay/state machine: retransmit, backpressure, idle timeout и диагностика.
+1. Добить оставшийся TCP hardening: out-of-order buffering, write backpressure, расширенная диагностика и Android device smoke при `establishTunnel=true`.
 2. Добавить QUIC host correlation для hostlist-based `udpFake`.
 3. Добавить production log stream поверх текущего `ProxyRuntimeController`.
 4. Расширить diagnostics snapshot, если UI понадобится больше runtime health-полей.

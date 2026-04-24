@@ -15,6 +15,7 @@ import java.net.SocketTimeoutException
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 internal data class TunForwarderCapabilities(
     val ipv4PacketCodecReady: Boolean,
@@ -49,7 +50,9 @@ internal class TunPacketForwarder(
     private val outputLock = Any()
     private val udpSessions = ConcurrentHashMap<UdpFlowKey, UdpRelaySession>()
     private val tcpSessions = ConcurrentHashMap<TcpFlowKey, TcpRelaySession>()
+    private val lastSessionCleanupAt = AtomicLong(0)
     private var readerThread: Thread? = null
+    private var cleanupThread: Thread? = null
     private var output: FileOutputStream? = null
 
     fun start(): TunPacketForwarderStatus {
@@ -63,6 +66,10 @@ internal class TunPacketForwarder(
 
         output = FileOutputStream(descriptor.fileDescriptor)
         readerThread = Thread(::readLoop, "QNZapret-TUN-reader").apply {
+            isDaemon = true
+            start()
+        }
+        cleanupThread = Thread(::cleanupLoop, "QNZapret-session-cleanup").apply {
             isDaemon = true
             start()
         }
@@ -90,6 +97,8 @@ internal class TunPacketForwarder(
 
         readerThread?.interrupt()
         readerThread = null
+        cleanupThread?.interrupt()
+        cleanupThread = null
     }
 
     private fun readLoop() {
@@ -116,7 +125,19 @@ internal class TunPacketForwarder(
         }
     }
 
+    private fun cleanupLoop() {
+        while (running.get()) {
+            try {
+                Thread.sleep(SESSION_CLEANUP_INTERVAL_MS)
+            } catch (_: InterruptedException) {
+                return
+            }
+            cleanupExpiredSessions()
+        }
+    }
+
     private fun handlePacket(buffer: ByteArray, packetLength: Int) {
+        cleanupExpiredSessions()
         val packet = IpPacketCodec.parseIpPacket(buffer, packetLength) ?: return
         when (packet.protocol) {
             IpProtocolNumber.UDP -> forwardUdp(buffer, packet)
@@ -205,7 +226,7 @@ internal class TunPacketForwarder(
             return
         }
 
-        val segmentLength = segment.sequenceLength()
+        val segmentLength = TcpSequence.length(segment)
         val flags: Int
         val sequenceNumber: Int
         val acknowledgementNumber: Int
@@ -216,7 +237,7 @@ internal class TunPacketForwarder(
         } else {
             flags = TcpFlags.RST or TcpFlags.ACK
             sequenceNumber = 0
-            acknowledgementNumber = addSequence(segment.sequenceNumber, segmentLength)
+            acknowledgementNumber = TcpSequence.add(segment.sequenceNumber, segmentLength)
         }
 
         val response = IpPacketCodec.buildTcpPacket(
@@ -231,6 +252,23 @@ internal class TunPacketForwarder(
             windowSize = 0,
         )
         writePacketToTun(response)
+    }
+
+    private fun cleanupExpiredSessions(now: Long = System.currentTimeMillis()) {
+        val lastCleanup = lastSessionCleanupAt.get()
+        if (now - lastCleanup < SESSION_CLEANUP_INTERVAL_MS) {
+            return
+        }
+        if (!lastSessionCleanupAt.compareAndSet(lastCleanup, now)) {
+            return
+        }
+
+        udpSessions.values
+            .filter { session -> session.isExpired(now) }
+            .forEach(UdpRelaySession::close)
+        tcpSessions.values
+            .filter { session -> session.isExpired(now) }
+            .forEach(TcpRelaySession::close)
     }
 
     private fun writePacketToTun(packet: ByteArray) {
@@ -304,11 +342,12 @@ internal class TunPacketForwarder(
         private var connectorThread: Thread? = null
         private var receiverThread: Thread? = null
         private var remoteOutput: OutputStream? = null
-        private var clientNextSequence = addSequence(initialSegment.sequenceNumber, 1)
+        private var pendingPayloadBytes = 0
+        private val clientState = TcpRelayState(initialSegment.sequenceNumber)
         private val serverInitialSequence = initialServerSequence(key, initialSegment)
-        private var serverNextSequence = addSequence(serverInitialSequence, 1)
+        private var serverNextSequence = TcpSequence.add(serverInitialSequence, 1)
+        private val lastActivityAt = AtomicLong(System.currentTimeMillis())
         private var strategyEvaluated = false
-        private var clientFinReceived = false
         private var finSentToClient = false
 
         fun start() {
@@ -328,6 +367,7 @@ internal class TunPacketForwarder(
         }
 
         fun handleSegment(segment: TcpSegment) {
+            touch()
             if (closed.get()) {
                 return
             }
@@ -342,39 +382,21 @@ internal class TunPacketForwarder(
                 return
             }
 
-            var payloadToForward: ByteArray? = null
-            var acceptedFin = false
-            var shouldAck = false
-
-            synchronized(stateLock) {
-                if (segment.payload.isNotEmpty()) {
-                    if (segment.sequenceNumber == clientNextSequence) {
-                        clientNextSequence = addSequence(clientNextSequence, segment.payload.size)
-                        payloadToForward = segment.payload
-                        shouldAck = true
-                    } else {
-                        shouldAck = true
-                    }
-                }
-
-                if (segment.hasFin) {
-                    val finSequence = addSequence(segment.sequenceNumber, segment.payload.size)
-                    if (finSequence == clientNextSequence && !clientFinReceived) {
-                        clientNextSequence = addSequence(clientNextSequence, 1)
-                        clientFinReceived = true
-                        acceptedFin = true
-                    }
-                    shouldAck = true
-                }
+            val result = synchronized(stateLock) {
+                clientState.processClientSegment(segment)
             }
 
-            payloadToForward?.let(::forwardClientPayload)
-            if (acceptedFin) {
+            result.payload?.let(::forwardClientPayload)
+            if (result.acceptedFin) {
                 shutdownRemoteOutput()
             }
-            if (shouldAck) {
+            if (result.shouldAck) {
                 sendAckToClient()
             }
+        }
+
+        fun isExpired(now: Long): Boolean {
+            return now - lastActivityAt.get() > TCP_SESSION_IDLE_TIMEOUT_MS
         }
 
         override fun close() {
@@ -399,10 +421,12 @@ internal class TunPacketForwarder(
                 synchronized(stateLock) {
                     remoteOutput = output
                     while (pendingPayloads.isNotEmpty()) {
-                        output.write(pendingPayloads.removeFirst())
+                        val payload = pendingPayloads.removeFirst()
+                        output.write(payload)
+                        pendingPayloadBytes -= payload.size
                     }
                     output.flush()
-                    if (clientFinReceived) {
+                    if (clientState.clientFinReceived) {
                         socket.shutdownOutput()
                     }
                 }
@@ -442,6 +466,7 @@ internal class TunPacketForwarder(
                         continue
                     }
 
+                    touch()
                     sendPayloadToClient(buffer.copyOfRange(0, read))
                 }
                 gracefulFinSent = sendFinToClient()
@@ -462,14 +487,27 @@ internal class TunPacketForwarder(
             }
 
             try {
+                var pendingOverflow = false
                 synchronized(stateLock) {
                     val output = remoteOutput
                     if (output == null) {
-                        chunks.forEach { pendingPayloads.addLast(it) }
+                        val chunkBytes = chunks.sumOf { it.size }
+                        if (pendingPayloadBytes + chunkBytes > MAX_PENDING_TCP_PAYLOAD_BYTES) {
+                            pendingOverflow = true
+                        } else {
+                            chunks.forEach { payload ->
+                                pendingPayloads.addLast(payload)
+                                pendingPayloadBytes += payload.size
+                            }
+                        }
                     } else {
                         chunks.forEach(output::write)
                         output.flush()
                     }
+                }
+                if (pendingOverflow) {
+                    sendResetToClient()
+                    close()
                 }
             } catch (_: IOException) {
                 sendResetToClient()
@@ -545,10 +583,10 @@ internal class TunPacketForwarder(
                 val chunk = payload.copyOfRange(offset, offset + chunkSize)
                 val response = synchronized(stateLock) {
                     val sequenceNumber = serverNextSequence
-                    serverNextSequence = addSequence(serverNextSequence, chunk.size)
+                    serverNextSequence = TcpSequence.add(serverNextSequence, chunk.size)
                     buildTcpResponsePacket(
                         sequenceNumber = sequenceNumber,
-                        acknowledgementNumber = clientNextSequence,
+                        acknowledgementNumber = clientState.clientNextSequence,
                         flags = TcpFlags.ACK or TcpFlags.PSH,
                         payload = chunk,
                     )
@@ -562,7 +600,7 @@ internal class TunPacketForwarder(
             val response = synchronized(stateLock) {
                 buildTcpResponsePacket(
                     sequenceNumber = serverInitialSequence,
-                    acknowledgementNumber = clientNextSequence,
+                    acknowledgementNumber = clientState.clientNextSequence,
                     flags = TcpFlags.SYN or TcpFlags.ACK,
                 )
             }
@@ -573,7 +611,7 @@ internal class TunPacketForwarder(
             val response = synchronized(stateLock) {
                 buildTcpResponsePacket(
                     sequenceNumber = serverNextSequence,
-                    acknowledgementNumber = clientNextSequence,
+                    acknowledgementNumber = clientState.clientNextSequence,
                     flags = TcpFlags.ACK,
                 )
             }
@@ -587,10 +625,10 @@ internal class TunPacketForwarder(
                 } else {
                     finSentToClient = true
                     val sequenceNumber = serverNextSequence
-                    serverNextSequence = addSequence(serverNextSequence, 1)
+                    serverNextSequence = TcpSequence.add(serverNextSequence, 1)
                     buildTcpResponsePacket(
                         sequenceNumber = sequenceNumber,
-                        acknowledgementNumber = clientNextSequence,
+                        acknowledgementNumber = clientState.clientNextSequence,
                         flags = TcpFlags.FIN or TcpFlags.ACK,
                     )
                 }
@@ -607,7 +645,7 @@ internal class TunPacketForwarder(
             val response = synchronized(stateLock) {
                 buildTcpResponsePacket(
                     sequenceNumber = serverNextSequence,
-                    acknowledgementNumber = clientNextSequence,
+                    acknowledgementNumber = clientState.clientNextSequence,
                     flags = TcpFlags.RST or TcpFlags.ACK,
                 )
             }
@@ -642,6 +680,10 @@ internal class TunPacketForwarder(
             }
         }
 
+        private fun touch() {
+            lastActivityAt.set(System.currentTimeMillis())
+        }
+
         private fun maxTcpPayloadSize(): Int {
             val ipHeaderLength = if (key.ipVersion == IpVersion.IPV4) IPV4_HEADER_LENGTH else IPV6_HEADER_LENGTH
             return (mtu - ipHeaderLength - TCP_HEADER_LENGTH).coerceIn(
@@ -659,6 +701,7 @@ internal class TunPacketForwarder(
         private val onClosed: () -> Unit,
     ) : AutoCloseable {
         private val closed = AtomicBoolean(false)
+        private val lastActivityAt = AtomicLong(System.currentTimeMillis())
         private val socket = DatagramSocket()
         private val receiverThread: Thread
 
@@ -684,7 +727,12 @@ internal class TunPacketForwarder(
                 return
             }
 
+            touch()
             socket.send(DatagramPacket(payload, payload.size))
+        }
+
+        fun isExpired(now: Long): Boolean {
+            return now - lastActivityAt.get() > UDP_SESSION_IDLE_TIMEOUT_MS
         }
 
         override fun close() {
@@ -709,6 +757,7 @@ internal class TunPacketForwarder(
                         packet.offset,
                         packet.offset + packet.length,
                     )
+                    touch()
                     val response = IpPacketCodec.buildUdpPacket(
                         ipVersion = key.ipVersion,
                         sourceAddress = key.destinationAddress,
@@ -725,6 +774,10 @@ internal class TunPacketForwarder(
                 onClosed()
             }
         }
+
+        private fun touch() {
+            lastActivityAt.set(System.currentTimeMillis())
+        }
     }
 
     companion object {
@@ -735,16 +788,6 @@ internal class TunPacketForwarder(
             ipv6UdpForwarderReady = true,
             tcpForwarderReady = true,
         )
-
-        private fun TcpSegment.sequenceLength(): Int {
-            return payload.size +
-                (if (hasSyn) 1 else 0) +
-                (if (hasFin) 1 else 0)
-        }
-
-        private fun addSequence(sequenceNumber: Int, delta: Int): Int {
-            return sequenceNumber + delta
-        }
 
         private fun initialServerSequence(key: TcpFlowKey, segment: TcpSegment): Int {
             var seed = 17
@@ -758,9 +801,13 @@ internal class TunPacketForwarder(
 
         private const val DEFAULT_PACKET_BUFFER_SIZE = 16_384
         private const val MAX_UDP_PACKET_SIZE = 65_507
+        private const val SESSION_CLEANUP_INTERVAL_MS = 30_000L
+        private const val UDP_SESSION_IDLE_TIMEOUT_MS = 120_000L
+        private const val TCP_SESSION_IDLE_TIMEOUT_MS = 120_000L
         private const val TCP_CONNECT_TIMEOUT_MS = 10_000
         private const val TCP_FIN_GRACE_MS = 1_000L
         private const val SOCKET_TIMEOUT_MS = 1_000
+        private const val MAX_PENDING_TCP_PAYLOAD_BYTES = 256 * 1024
         private const val IPV4_HEADER_LENGTH = 20
         private const val IPV6_HEADER_LENGTH = 40
         private const val TCP_HEADER_LENGTH = 20
