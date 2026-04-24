@@ -25,17 +25,25 @@ Android-направление строится как no-root VPN/proxy runtime
 
 ## Текущая стадия
 
-Проект находится на стадии брендированного frontend shell с Android runtime-интеграцией, доведенной до native strategy engine.
+Проект находится на стадии объединенного frontend/backend среза: продуктовый Flutter shell уже подключен к общей Dart runtime-поверхности, а Android-направление доведено до native strategy engine, userspace forwarding foundation и QUIC host correlation.
 
 Что уже есть:
 
 - минимальный Flutter bootstrap в `lib/main.dart`
 - корневой `MaterialApp` в `lib/app/app.dart`
-- продуктовая dark-mode-first тема в `lib/app/theme/app_theme.dart`
+- общий application shell в `lib/app/navigation/app_shell.dart` с вкладками "Главная" и "Логи"
+- floating navigation island с tap/swipe навигацией между основными вкладками
+- продуктовая Material 3 Expressive theme-система в `lib/app/theme/app_theme.dart`
+- 6 палитр приложения с light/dark вариантами и сохранением выбранного режима
 - стартовый экран в `lib/features/home/presentation/home_screen.dart`
+- экран логов в `lib/features/logs/presentation/logs_screen.dart`
+- экран настроек в `lib/features/settings/presentation/settings_screen.dart`
+- адаптивное открытие настроек: полноценная page route на телефонах и dialog/panel на больших экранах
 - общий Dart-контракт runtime в `lib/core/backend/proxy_runtime.dart`
 - frontend-friendly `ProxyRuntimeController` и barrel export `lib/core/backend/backend.dart`
 - composition helper `createDefaultProxyRuntime()`, который подключает Android adapter на Android и stub-адаптеры на desktop
+- Riverpod application layer в `lib/core/state/runtime_controller.dart`, который адаптирует `ProxyRuntimeSnapshot` в UI-состояния, CTA, status chips и локальные diagnostic logs
+- русские пользовательские подписи runtime-состояний, CTA, логов и Android foreground notification
 - serializable strategy profile model для HTTP/TLS/QUIC правил
 - `UnmatchedTrafficPolicy.direct` для трафика вне hostlists: списки включают desync-обработку, а не ограничивают общий доступ
 - `StubProxyRuntime` для состояния, где нативный runtime еще не подключен
@@ -52,15 +60,17 @@ Android-направление строится как no-root VPN/proxy runtime
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
+- Android launcher icons через adaptive icon resources и desktop/window icons для Linux/Windows
 - базовые тесты сериализации и парсинга runtime-моделей
 - Android JVM unit tests для TCP relay state, IPv4/IPv6 TCP packet codec, QUIC host correlation и strategy engine QUIC decisions
+- widget-тесты для home, settings и logs layout
 
 Что еще не подключено:
 
 - оставшийся TCP hardening: out-of-order buffering, полноценный write backpressure, расширенная диагностика и Android device smoke при `establishTunnel=true`
 - raw TCP `fake`/sequence tricks в no-root socket mode; текущий TCP path безопасно применяет только split как best-effort stream write split и пропускает небезопасный fake
 - расширенная QUIC correlation для DoH/DoT, DNS cache misses и более сложных multi-IP сценариев; базовый UDP/53 + TCP HTTP/TLS correlation уже подключен
-- поток логов из backend
+- production поток логов из backend; текущий экран логов уже показывает application/runtime-controller events, но еще не читает native log stream
 - desktop bridge implementations для Linux и Windows
 - полноценные runtime-контролы, пресеты и профили стратегий
 
@@ -120,14 +130,32 @@ UI и продуктовые экраны могут развиваться от
 
 ## Текущее продуктовое поведение
 
-Стартовый экран показывает:
+Текущий UI уже оформлен как пользовательский продукт, а не презентационный стенд.
 
-- направление продукта
-- поддерживаемые платформы
-- состояние текущего runtime bridge
-- ближайшие backend-интеграционные этапы
+Главная вкладка показывает:
 
-Composition root уже передает в экран `createDefaultProxyRuntime()`: на Android это реальный `AndroidProxyRuntime`, на desktop пока stub-адаптеры.
+- название QNZapret и короткое пользовательское описание
+- компактные status chips по реальному `ProxyRuntimeSnapshot`
+- CTA запуска/остановки сервисов
+- честное состояние `serviceActive`, `strategyEngineReady`, `trafficForwarderReady` и `tunnelActive`
+- иллюстрацию состояния соединения без прямой зависимости от Android/Kotlin деталей
+
+Вкладка "Логи" показывает:
+
+- человекочитаемые события application/runtime-controller слоя
+- состояние автопрокрутки
+- количество строк
+- текущий runtime status
+- терминальный блок, готовый к подключению production log stream из backend
+
+Экран настроек показывает:
+
+- бренд и версию приложения
+- выбор режима темы: системная, светлая, темная
+- выбор цветовой палитры
+- блок "О приложении" и внешние CTA
+
+Composition root создает `createDefaultProxyRuntime()` и передает его через `proxyRuntimeProvider`: на Android это реальный `AndroidProxyRuntime`, на desktop пока stub-адаптеры. UI работает через `RuntimeController` / `ProxyRuntimeController` и не вызывает Kotlin/Android детали напрямую.
 
 ## Ближайшая цель следующей стадии
 

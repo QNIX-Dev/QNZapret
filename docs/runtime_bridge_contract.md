@@ -63,6 +63,7 @@ abstract interface class ProxyRuntime {
 - `AndroidProxyRuntime` - adapter поверх Android `MethodChannel`.
 - `ProxyRuntimeController` - UI/application facade над `ProxyRuntime`, который хранит snapshot, busy/error state и default launch config.
 - `createDefaultProxyRuntime()` - composition helper: на Android возвращает `AndroidProxyRuntime`, на Linux/Windows возвращает stub-адаптеры до появления desktop runtime.
+- `RuntimeController` в `lib/core/state/runtime_controller.dart` - Riverpod application layer, который превращает `ProxyRuntimeController` в продуктовые CTA, status chips и локальные diagnostic logs.
 
 Рекомендуемая точка входа для frontend:
 
@@ -122,7 +123,7 @@ Wire payload:
 ```dart
 {
   'granted': true,
-  'message': 'VPN permission granted. Android strategy runtime is ready to start.',
+  'message': 'VPN-разрешение получено. Сервисы готовы к запуску.',
 }
 ```
 
@@ -275,7 +276,7 @@ Wire payload:
 {
   'platform': 'android',
   'state': 'running',
-  'message': 'Android VPN strategy engine is active.',
+  'message': 'Ядро обхода активно.',
   'backendConnected': true,
   'vpnPermissionGranted': true,
   'serviceActive': true,
@@ -305,7 +306,7 @@ Wire payload:
 - `ipv6UdpForwarderReady` означает, что UDP relay core умеет работать с IPv6 destination/source addresses.
 - `tcpForwarderReady` означает готовность TCP userspace relay/state machine.
 - `activeProfileName` дает UI человекочитаемое имя профиля, если runtime активен.
-- `message` должен быть пригоден для отображения в UI.
+- `message` должен быть пригоден для отображения в UI. На текущем Android path user-facing сообщения возвращаются на русском; технические имена flags остаются wire protocol.
 
 ### `ProxyRuntimeController`
 
@@ -335,6 +336,22 @@ Wire payload:
 - `updateLaunchConfig(config)`
 
 UI должен предпочитать этот controller прямым вызовам `AndroidProxyRuntime`, если ему нужны кнопки, loading state и отображение ошибок.
+
+### `RuntimeController`
+
+Назначение:
+
+- связать `ProxyRuntimeController` с Riverpod application state
+- дать Home/Logs единый источник runtime-состояния
+- собрать локальные diagnostic logs до появления production native log stream
+- адаптировать технические snapshot flags в человекочитаемые русские подписи
+
+Текущие потребители:
+
+- `lib/features/home/presentation/home_screen.dart`
+- `lib/features/logs/presentation/logs_screen.dart`
+
+Важно: `RuntimeController` не заменяет backend contract. Если нужен новый native signal, сначала расширяется `ProxyRuntime` / `ProxyRuntimeSnapshot`, потом UI-слой использует новое поле.
 
 ## Методы
 
