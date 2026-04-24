@@ -3,28 +3,23 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_theme.dart';
+import '../../backend/backend.dart';
 import '../../motion/app_motion.dart';
 import '../../state/runtime_view_models.dart';
 
 class ConnectedFlowIllustration extends StatelessWidget {
   const ConnectedFlowIllustration({
-    required this.runtimeState,
+    required this.snapshot,
     super.key,
     this.compact = false,
   });
 
-  final CombinedRuntimeState runtimeState;
+  final ProxyRuntimeSnapshot snapshot;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
-    final progress = switch (runtimeState.summaryStatus) {
-      ServiceRuntimeStatus.idle => 0.26,
-      ServiceRuntimeStatus.starting => 0.62,
-      ServiceRuntimeStatus.running => 1.0,
-      ServiceRuntimeStatus.stopping => 0.38,
-      ServiceRuntimeStatus.failed => 0.74,
-    };
+    final progress = _progressFor(snapshot);
     final theme = Theme.of(context);
     final highlight =
         Color.lerp(
@@ -44,8 +39,9 @@ class ConnectedFlowIllustration extends StatelessWidget {
           return CustomPaint(
             painter: _ConnectedFlowPainter(
               progress: animatedProgress,
-              hasFailure: runtimeState.hasFailure,
-              isRunning: runtimeState.isFullyRunning,
+              hasFailure: snapshot.hasFailure,
+              isRunning: snapshot.serviceActive,
+              tunnelActive: snapshot.tunnelActive,
               primary: theme.colorScheme.primary,
               secondary: theme.colorScheme.secondary,
               tertiary: theme.colorScheme.tertiary,
@@ -58,6 +54,31 @@ class ConnectedFlowIllustration extends StatelessWidget {
       ),
     );
   }
+
+  double _progressFor(ProxyRuntimeSnapshot snapshot) {
+    if (snapshot.hasFailure) {
+      return 0.74;
+    }
+    if (snapshot.tunnelActive && snapshot.trafficForwarderReady) {
+      return 1;
+    }
+    if (snapshot.strategyEngineReady) {
+      return 0.78;
+    }
+    if (snapshot.serviceActive || snapshot.state == ProxyRuntimeState.running) {
+      return 0.62;
+    }
+    if (snapshot.state == ProxyRuntimeState.starting) {
+      return 0.48;
+    }
+    if (snapshot.state == ProxyRuntimeState.stopping) {
+      return 0.38;
+    }
+    if (snapshot.backendConnected) {
+      return 0.3;
+    }
+    return 0.22;
+  }
 }
 
 class _ConnectedFlowPainter extends CustomPainter {
@@ -65,6 +86,7 @@ class _ConnectedFlowPainter extends CustomPainter {
     required this.progress,
     required this.hasFailure,
     required this.isRunning,
+    required this.tunnelActive,
     required this.primary,
     required this.secondary,
     required this.tertiary,
@@ -76,6 +98,7 @@ class _ConnectedFlowPainter extends CustomPainter {
   final double progress;
   final bool hasFailure;
   final bool isRunning;
+  final bool tunnelActive;
   final Color primary;
   final Color secondary;
   final Color tertiary;
@@ -109,7 +132,7 @@ class _ConnectedFlowPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4
       ..strokeCap = StrokeCap.round
-      ..color = isRunning
+      ..color = tunnelActive
           ? secondary.withValues(alpha: 0.96)
           : primary.withValues(alpha: 0.72);
 
@@ -203,6 +226,7 @@ class _ConnectedFlowPainter extends CustomPainter {
     return oldDelegate.progress != progress ||
         oldDelegate.hasFailure != hasFailure ||
         oldDelegate.isRunning != isRunning ||
+        oldDelegate.tunnelActive != tunnelActive ||
         oldDelegate.primary != primary ||
         oldDelegate.secondary != secondary ||
         oldDelegate.tertiary != tertiary ||

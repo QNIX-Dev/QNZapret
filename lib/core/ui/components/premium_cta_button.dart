@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_theme.dart';
+import '../../backend/backend.dart';
 import '../../motion/app_motion.dart';
-import '../../state/runtime_view_models.dart';
+import '../../state/runtime_controller.dart';
 import '../design_tokens.dart';
 
 class PremiumCtaButton extends StatelessWidget {
   const PremiumCtaButton({
-    required this.runtimeState,
+    required this.runtimeView,
     required this.onPressed,
     super.key,
   });
 
-  final CombinedRuntimeState runtimeState;
+  final RuntimeViewState runtimeView;
   final VoidCallback? onPressed;
 
   @override
@@ -95,30 +96,48 @@ class PremiumCtaButton extends StatelessWidget {
   }
 
   _CtaViewModel _resolveViewModel(ThemeData theme, AppThemeExtras extras) {
-    if (runtimeState.hasPartialFailure) {
+    final snapshot = runtimeView.snapshot;
+    if (runtimeView.latestFailure != null) {
       return _CtaViewModel(
-        title: 'Возвращаем состояние',
-        icon: Icons.autorenew_rounded,
+        title: 'Повторить команду',
+        icon: Icons.refresh_rounded,
         foreground: theme.colorScheme.onError,
-        loading: true,
-        enabled: false,
+        loading: false,
+        enabled: onPressed != null,
         shadowColor: extras.danger,
         gradient: LinearGradient(colors: [extras.danger, extras.warning]),
       );
     }
 
-    switch (runtimeState.summaryStatus) {
-      case ServiceRuntimeStatus.idle:
+    if (runtimeView.isBusy) {
+      final stopping = snapshot.state == ProxyRuntimeState.stopping;
+      return _CtaViewModel(
+        title: stopping ? 'Остановка...' : 'Команда выполняется...',
+        icon: stopping
+            ? Icons.stop_circle_rounded
+            : Icons.rocket_launch_rounded,
+        foreground: theme.colorScheme.onPrimary,
+        loading: true,
+        enabled: false,
+        shadowColor: theme.colorScheme.secondary,
+        gradient: LinearGradient(
+          colors: [theme.colorScheme.primary, theme.colorScheme.secondary],
+        ),
+      );
+    }
+
+    switch (snapshot.state) {
+      case ProxyRuntimeState.idle:
         return _CtaViewModel(
-          title: runtimeState.hasFailure
-              ? 'Повторить запуск'
-              : 'Запустить сервисы',
-          icon: runtimeState.hasFailure
-              ? Icons.refresh_rounded
+          title: runtimeView.needsPrepare
+              ? 'Подготовить runtime'
+              : 'Запустить runtime',
+          icon: runtimeView.needsPrepare
+              ? Icons.verified_user_rounded
               : Icons.rocket_launch_rounded,
           foreground: theme.colorScheme.onPrimary,
           loading: false,
-          enabled: true,
+          enabled: onPressed != null,
           shadowColor: theme.colorScheme.primary,
           gradient: LinearGradient(
             colors: [
@@ -128,7 +147,7 @@ class PremiumCtaButton extends StatelessWidget {
             ],
           ),
         );
-      case ServiceRuntimeStatus.starting:
+      case ProxyRuntimeState.starting:
         return _CtaViewModel(
           title: 'Запуск...',
           icon: Icons.rocket_launch_rounded,
@@ -140,17 +159,17 @@ class PremiumCtaButton extends StatelessWidget {
             colors: [theme.colorScheme.primary, theme.colorScheme.secondary],
           ),
         );
-      case ServiceRuntimeStatus.running:
+      case ProxyRuntimeState.running:
         return _CtaViewModel(
-          title: 'Остановить сервисы',
+          title: 'Остановить runtime',
           icon: Icons.stop_circle_rounded,
           foreground: theme.colorScheme.onError,
           loading: false,
-          enabled: true,
+          enabled: onPressed != null,
           shadowColor: extras.warning,
           gradient: LinearGradient(colors: [extras.warning, extras.danger]),
         );
-      case ServiceRuntimeStatus.stopping:
+      case ProxyRuntimeState.stopping:
         return _CtaViewModel(
           title: 'Остановка...',
           icon: Icons.stop_circle_rounded,
@@ -162,13 +181,13 @@ class PremiumCtaButton extends StatelessWidget {
             colors: [extras.warning, theme.colorScheme.tertiary],
           ),
         );
-      case ServiceRuntimeStatus.failed:
+      case ProxyRuntimeState.failed:
         return _CtaViewModel(
-          title: 'Повторить запуск',
+          title: 'Повторить запуск runtime',
           icon: Icons.refresh_rounded,
           foreground: theme.colorScheme.onError,
           loading: false,
-          enabled: true,
+          enabled: onPressed != null,
           shadowColor: extras.danger,
           gradient: LinearGradient(
             colors: [extras.danger, theme.colorScheme.secondary],

@@ -46,16 +46,17 @@ Android-направление строится как no-root VPN/proxy runtime
 - Android local strategy proxy lifecycle в `LocalStrategyProxy.kt`
 - native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
 - IPv4/IPv6 UDP packet codec и TCP segment codec в `IpPacketCodec.kt`
-- userspace forwarder core в `TunPacketForwarder.kt` с IPv4/IPv6 UDP relay через protected `DatagramSocket` и TCP relay/state machine через protected `Socket`
+- userspace forwarder core в `TunPacketForwarder.kt` с IPv4/IPv6 UDP relay через protected `DatagramSocket` и TCP relay/state machine через protected `Socket`; TCP path обрабатывает duplicate/overlap retransmits, ACK/drop для out-of-order payload и TCP/UDP idle session cleanup
 - TUN lifecycle в `TunTransport.kt`: default-route остается выключенным при `establishTunnel=false`, но может подниматься при готовых TCP/UDP capabilities и явном `establishTunnel=true`
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
 - базовые тесты сериализации и парсинга runtime-моделей
+- Android JVM unit tests для TCP relay state и IPv4/IPv6 TCP packet codec
 
 Что еще не подключено:
 
-- production-hardening TCP relay: retransmit/backpressure/idle cleanup/расширенная диагностика
+- оставшийся TCP hardening: out-of-order buffering, полноценный write backpressure, расширенная диагностика и Android device smoke при `establishTunnel=true`
 - raw TCP `fake`/sequence tricks в no-root socket mode; текущий TCP path безопасно применяет только split как best-effort stream write split и пропускает небезопасный fake
 - QUIC host correlation для применения `udpFake` не только при заранее известном host target
 - поток логов из backend
@@ -131,7 +132,7 @@ Composition root уже передает в экран `createDefaultProxyRuntim
 
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
-1. захарднить TCP userspace relay/state machine: retransmit, backpressure, idle timeout и диагностика;
+1. добить оставшийся TCP hardening: out-of-order buffering, write backpressure, диагностика и Android device smoke при `establishTunnel=true`;
 2. добавить QUIC host correlation к существующему strategy engine;
 3. добавить production log stream поверх текущего controller/snapshot слоя;
 4. после Android закрепить equivalent contract для Linux и Windows.

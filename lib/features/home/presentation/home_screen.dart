@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/app_metadata.dart';
+import '../../../core/backend/backend.dart';
 import '../../../core/state/runtime_controller.dart';
 import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/connected_flow_illustration.dart';
@@ -24,7 +25,6 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final runtimeView = ref.watch(runtimeControllerProvider);
-    final runtimeState = runtimeView.runtime;
     final controller = ref.read(runtimeControllerProvider.notifier);
 
     return LayoutBuilder(
@@ -86,10 +86,10 @@ class HomeScreen extends ConsumerWidget {
                                     centered: false,
                                     onPrimaryAction: () async {
                                       HapticFeedback.lightImpact();
-                                      if (runtimeState.isFullyRunning) {
-                                        await controller.stopAllServices();
+                                      if (runtimeView.canStopCommand) {
+                                        await controller.stopRuntime();
                                       } else {
-                                        await controller.startAllServices();
+                                        await controller.startRuntime();
                                       }
                                     },
                                   ),
@@ -98,7 +98,7 @@ class HomeScreen extends ConsumerWidget {
                                 Expanded(
                                   flex: 5,
                                   child: _HeroIllustration(
-                                    runtimeState: runtimeState,
+                                    snapshot: runtimeView.snapshot,
                                     framed: true,
                                   ),
                                 ),
@@ -107,7 +107,7 @@ class HomeScreen extends ConsumerWidget {
                           )
                         else ...[
                           _HeroIllustration(
-                            runtimeState: runtimeState,
+                            snapshot: runtimeView.snapshot,
                             framed: false,
                           ),
                           SizedBox(
@@ -118,10 +118,10 @@ class HomeScreen extends ConsumerWidget {
                             centered: true,
                             onPrimaryAction: () async {
                               HapticFeedback.lightImpact();
-                              if (runtimeState.isFullyRunning) {
-                                await controller.stopAllServices();
+                              if (runtimeView.canStopCommand) {
+                                await controller.stopRuntime();
                               } else {
-                                await controller.startAllServices();
+                                await controller.startRuntime();
                               }
                             },
                           ),
@@ -159,7 +159,7 @@ class _HeroTopBar extends StatelessWidget {
               Text(appDisplayName, style: theme.textTheme.displayMedium),
               const SizedBox(height: AppSpacing.xs),
               Text(
-                'Запуск и остановка сервисов в одном месте.',
+                'Управление runtime и состояниями моста.',
                 style: theme.textTheme.bodyLarge?.copyWith(
                   color: context.appThemeExtras.mutedForeground,
                 ),
@@ -194,44 +194,39 @@ class _HeroDetails extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final runtimeState = runtimeView.runtime;
     final message = _statusMessage(runtimeView);
     final tone = _toneForMessage(context, runtimeView);
+    final visibleItems = runtimeView.statusItems
+        .take(3)
+        .toList(growable: false);
 
     return Column(
       crossAxisAlignment: centered
           ? CrossAxisAlignment.center
           : CrossAxisAlignment.start,
       children: [
-        Align(
-          alignment: centered ? Alignment.center : Alignment.centerLeft,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: centered ? 520 : 480),
-            child: RuntimeStatusChip(
-              serviceState: runtimeState.stateFor(BypassServiceType.nfqws),
-              expanded: false,
-            ),
-          ),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        Align(
-          alignment: centered ? Alignment.center : Alignment.centerLeft,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: centered ? 520 : 480),
-            child: RuntimeStatusChip(
-              serviceState: runtimeState.stateFor(
-                BypassServiceType.telegramProxy,
+        for (var index = 0; index < visibleItems.length; index += 1) ...[
+          Align(
+            alignment: centered ? Alignment.center : Alignment.centerLeft,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: centered ? 520 : 480),
+              child: RuntimeStatusChip(
+                statusItem: visibleItems[index],
+                expanded: false,
               ),
-              expanded: false,
             ),
           ),
-        ),
+          if (index != visibleItems.length - 1)
+            const SizedBox(height: AppSpacing.sm),
+        ],
         SizedBox(height: centered ? AppSpacing.lg : AppSpacing.xl),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 520),
           child: PremiumCtaButton(
-            runtimeState: runtimeState,
-            onPressed: runtimeState.hasPartialFailure ? null : onPrimaryAction,
+            runtimeView: runtimeView,
+            onPressed: runtimeView.canStartCommand || runtimeView.canStopCommand
+                ? onPrimaryAction
+                : null,
           ),
         ),
         if (message case final message?) ...[
@@ -263,49 +258,57 @@ class _HeroDetails extends StatelessWidget {
   }
 
   String? _statusMessage(RuntimeViewState runtimeView) {
-    final runtimeState = runtimeView.runtime;
     final failure = runtimeView.latestFailure;
+    final snapshot = runtimeView.snapshot;
 
-    if (runtimeState.hasPartialFailure) {
-      return 'Не все сервисы удалось запустить. Возвращаем состояние назад.';
-    }
-
-    if (failure != null &&
-        runtimeState.summaryStatus == ServiceRuntimeStatus.failed) {
+    if (failure != null) {
       return failure.message;
     }
 
-    return switch (runtimeState.summaryStatus) {
-      ServiceRuntimeStatus.idle => null,
-      ServiceRuntimeStatus.starting => 'Запускаем сервисы по очереди.',
-      ServiceRuntimeStatus.running => 'Оба сервиса работают.',
-      ServiceRuntimeStatus.stopping => 'Останавливаем сервисы.',
-      ServiceRuntimeStatus.failed => 'Не удалось завершить запуск.',
+    if (snapshot.tunnelActive && snapshot.trafficForwarderReady) {
+      return 'TUN и userspace forwarder активны.';
+    }
+
+    if (snapshot.state == ProxyRuntimeState.running &&
+        snapshot.serviceActive &&
+        !snapshot.tunnelActive) {
+      return 'Foreground service активен; туннель выключен текущей конфигурацией.';
+    }
+
+    if (snapshot.strategyEngineReady) {
+      return 'Strategy engine готов, готовность forwarder и tunnel показана отдельно.';
+    }
+
+    return switch (snapshot.state) {
+      ProxyRuntimeState.idle => null,
+      ProxyRuntimeState.starting => 'Запускаем runtime через adapter.',
+      ProxyRuntimeState.running => 'Runtime service активен.',
+      ProxyRuntimeState.stopping => 'Останавливаем runtime.',
+      ProxyRuntimeState.failed => 'Runtime сообщил сбой.',
     };
   }
 
   Color _toneForMessage(BuildContext context, RuntimeViewState runtimeView) {
     final extras = context.appThemeExtras;
 
-    if (runtimeView.runtime.hasPartialFailure ||
-        runtimeView.latestFailure != null) {
+    if (runtimeView.latestFailure != null || runtimeView.snapshot.hasFailure) {
       return extras.danger;
     }
 
-    return switch (runtimeView.runtime.summaryStatus) {
-      ServiceRuntimeStatus.idle => Theme.of(context).colorScheme.primary,
-      ServiceRuntimeStatus.starting => Theme.of(context).colorScheme.secondary,
-      ServiceRuntimeStatus.running => extras.success,
-      ServiceRuntimeStatus.stopping => extras.warning,
-      ServiceRuntimeStatus.failed => extras.danger,
+    return switch (runtimeView.snapshot.statusTone) {
+      RuntimeStatusTone.neutral => Theme.of(context).colorScheme.primary,
+      RuntimeStatusTone.info => Theme.of(context).colorScheme.secondary,
+      RuntimeStatusTone.success => extras.success,
+      RuntimeStatusTone.warning => extras.warning,
+      RuntimeStatusTone.danger => extras.danger,
     };
   }
 }
 
 class _HeroIllustration extends StatelessWidget {
-  const _HeroIllustration({required this.runtimeState, required this.framed});
+  const _HeroIllustration({required this.snapshot, required this.framed});
 
-  final CombinedRuntimeState runtimeState;
+  final ProxyRuntimeSnapshot snapshot;
   final bool framed;
 
   @override
@@ -314,7 +317,7 @@ class _HeroIllustration extends StatelessWidget {
 
     final illustration = Padding(
       padding: EdgeInsets.all(framed ? AppSpacing.xl : AppSpacing.sm),
-      child: ConnectedFlowIllustration(runtimeState: runtimeState),
+      child: ConnectedFlowIllustration(snapshot: snapshot),
     );
 
     if (!framed) {

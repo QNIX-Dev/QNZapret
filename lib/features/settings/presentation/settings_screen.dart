@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,8 +8,6 @@ import '../../../core/app_metadata.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/state/app_settings_controller.dart';
 import '../../../core/state/package_info_provider.dart';
-import '../../../core/state/runtime_controller.dart';
-import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/app_backdrop.dart';
 import '../../../core/ui/components/palette_preview_card.dart';
 import '../../../core/ui/components/settings_section_card.dart';
@@ -39,22 +36,15 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(appSettingsControllerProvider);
     final settingsController = ref.read(appSettingsControllerProvider.notifier);
-    final runtimeView = ref.watch(runtimeControllerProvider);
-    final runtimeController = ref.read(runtimeControllerProvider.notifier);
     final packageInfo = ref.watch(packageInfoProvider);
     final effectiveBrightness = Theme.of(context).brightness;
-    final showSimulationControls =
-        kDebugMode && runtimeView.hasSimulationControls;
 
     final body = _SettingsBody(
       presentation: presentation,
       settings: settings,
       settingsController: settingsController,
-      runtimeView: runtimeView,
-      runtimeController: runtimeController,
       packageInfo: packageInfo,
       effectiveBrightness: effectiveBrightness,
-      showSimulationControls: showSimulationControls,
       onClose: () => Navigator.of(context).maybePop(),
       onOpenLink: (uri) => _openLink(context, uri),
     );
@@ -84,11 +74,8 @@ class _SettingsBody extends StatelessWidget {
     required this.presentation,
     required this.settings,
     required this.settingsController,
-    required this.runtimeView,
-    required this.runtimeController,
     required this.packageInfo,
     required this.effectiveBrightness,
-    required this.showSimulationControls,
     required this.onClose,
     required this.onOpenLink,
   });
@@ -96,11 +83,8 @@ class _SettingsBody extends StatelessWidget {
   final SettingsScreenPresentation presentation;
   final AppSettingsState settings;
   final AppSettingsController settingsController;
-  final RuntimeViewState runtimeView;
-  final RuntimeController runtimeController;
   final AsyncValue<dynamic> packageInfo;
   final Brightness effectiveBrightness;
-  final bool showSimulationControls;
   final VoidCallback onClose;
   final Future<void> Function(Uri uri) onOpenLink;
 
@@ -119,11 +103,8 @@ class _SettingsBody extends StatelessWidget {
               fullPage: true,
               settings: settings,
               settingsController: settingsController,
-              runtimeView: runtimeView,
-              runtimeController: runtimeController,
               packageInfo: packageInfo,
               effectiveBrightness: effectiveBrightness,
-              showSimulationControls: showSimulationControls,
               onClose: onClose,
               onOpenLink: onOpenLink,
             )
@@ -139,11 +120,8 @@ class _SettingsBody extends StatelessWidget {
                   fullPage: false,
                   settings: settings,
                   settingsController: settingsController,
-                  runtimeView: runtimeView,
-                  runtimeController: runtimeController,
                   packageInfo: packageInfo,
                   effectiveBrightness: effectiveBrightness,
-                  showSimulationControls: showSimulationControls,
                   onClose: onClose,
                   onOpenLink: onOpenLink,
                 ),
@@ -160,11 +138,8 @@ class _SettingsBody extends StatelessWidget {
                   fullPage: false,
                   settings: settings,
                   settingsController: settingsController,
-                  runtimeView: runtimeView,
-                  runtimeController: runtimeController,
                   packageInfo: packageInfo,
                   effectiveBrightness: effectiveBrightness,
-                  showSimulationControls: showSimulationControls,
                   onClose: onClose,
                   onOpenLink: onOpenLink,
                 ),
@@ -180,11 +155,8 @@ class _SettingsPanel extends StatelessWidget {
     required this.fullPage,
     required this.settings,
     required this.settingsController,
-    required this.runtimeView,
-    required this.runtimeController,
     required this.packageInfo,
     required this.effectiveBrightness,
-    required this.showSimulationControls,
     required this.onClose,
     required this.onOpenLink,
   });
@@ -193,11 +165,8 @@ class _SettingsPanel extends StatelessWidget {
   final bool fullPage;
   final AppSettingsState settings;
   final AppSettingsController settingsController;
-  final RuntimeViewState runtimeView;
-  final RuntimeController runtimeController;
   final AsyncValue<dynamic> packageInfo;
   final Brightness effectiveBrightness;
-  final bool showSimulationControls;
   final VoidCallback onClose;
   final Future<void> Function(Uri uri) onOpenLink;
 
@@ -320,27 +289,6 @@ class _SettingsPanel extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            if (showSimulationControls) ...[
-                              const SizedBox(width: AppSpacing.lg),
-                              Expanded(
-                                child: StaggeredReveal(
-                                  delay: const Duration(milliseconds: 120),
-                                  child: SettingsSectionCard(
-                                    title: 'Тест запуска',
-                                    description:
-                                        'Локальные сценарии для проверки интерфейса.',
-                                    child: _SimulationScenarioSelector(
-                                      runtimeView: runtimeView,
-                                      onSelected: (scenario) async {
-                                        HapticFeedback.selectionClick();
-                                        await runtimeController
-                                            .setSimulationScenario(scenario);
-                                      },
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
                           ],
                         )
                       else ...[
@@ -360,26 +308,6 @@ class _SettingsPanel extends StatelessWidget {
                             ),
                           ),
                         ),
-                        if (showSimulationControls) ...[
-                          const SizedBox(height: AppSpacing.lg),
-                          StaggeredReveal(
-                            delay: const Duration(milliseconds: 120),
-                            child: SettingsSectionCard(
-                              title: 'Тест запуска',
-                              description:
-                                  'Локальные сценарии для проверки интерфейса.',
-                              child: _SimulationScenarioSelector(
-                                runtimeView: runtimeView,
-                                onSelected: (scenario) async {
-                                  HapticFeedback.selectionClick();
-                                  await runtimeController.setSimulationScenario(
-                                    scenario,
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
                       ],
                       const SizedBox(height: AppSpacing.lg),
                       StaggeredReveal(
@@ -720,78 +648,6 @@ class _ThemeSegmentState extends State<_ThemeSegment> {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _SimulationScenarioSelector extends StatelessWidget {
-  const _SimulationScenarioSelector({
-    required this.runtimeView,
-    required this.onSelected,
-  });
-
-  final RuntimeViewState runtimeView;
-  final ValueChanged<RuntimeLaunchScenario> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    final selectedScenario = runtimeView.selectedScenario;
-
-    return Wrap(
-      spacing: AppSpacing.sm,
-      runSpacing: AppSpacing.sm,
-      children: runtimeView.availableScenarios.map((scenario) {
-        return _ModeChip(
-          label: scenario.title,
-          icon: Icons.science_rounded,
-          selected: selectedScenario == scenario,
-          onTap: () => onSelected(scenario),
-        );
-      }).toList(),
-    );
-  }
-}
-
-class _ModeChip extends StatelessWidget {
-  const _ModeChip({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return ChoiceChip(
-      selected: selected,
-      onSelected: (_) => onTap(),
-      avatar: Icon(
-        icon,
-        size: 18,
-        color: selected
-            ? theme.colorScheme.onPrimaryContainer
-            : theme.colorScheme.onSurface,
-      ),
-      label: Text(label),
-      selectedColor: theme.colorScheme.primaryContainer,
-      backgroundColor: theme.colorScheme.surfaceContainerHigh,
-      side: BorderSide(color: context.appThemeExtras.glassStroke),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.pill),
-      ),
-      labelStyle: theme.textTheme.labelLarge?.copyWith(
-        color: selected
-            ? theme.colorScheme.onPrimaryContainer
-            : theme.colorScheme.onSurface,
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
     );
   }
 }

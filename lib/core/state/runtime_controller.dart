@@ -3,12 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../backend/proxy_runtime.dart';
-import '../motion/app_motion.dart';
+import '../backend/backend.dart';
 import 'runtime_view_models.dart';
 
 final proxyRuntimeProvider = Provider<ProxyRuntime>((ref) {
-  return StubProxyRuntime(_currentProxyPlatform());
+  return const StubProxyRuntime(ProxyPlatform.android);
 });
 
 final runtimeControllerProvider =
@@ -19,179 +18,295 @@ final runtimeControllerProvider =
 @immutable
 class RuntimeViewState {
   const RuntimeViewState({
-    required this.runtime,
-    required this.proxySnapshot,
+    required this.snapshot,
+    required this.launchConfig,
     required this.logs,
     required this.autoScrollEnabled,
-    required this.availableScenarios,
-    required this.selectedScenario,
+    required this.isBusy,
+    this.lastPrepareResult,
     this.latestFailure,
   });
 
-  factory RuntimeViewState.initial() {
+  factory RuntimeViewState.initial(ProxyRuntime runtime) {
     return RuntimeViewState(
-      runtime: CombinedRuntimeState.initial(),
-      proxySnapshot: ProxyRuntimeSnapshot.disconnected(_currentProxyPlatform()),
+      snapshot: ProxyRuntimeSnapshot.initial(runtime.platform),
+      launchConfig: ProxyLaunchConfig.defaultAndroidStrategy,
       logs: const [],
       autoScrollEnabled: true,
-      availableScenarios: RuntimeLaunchScenario.values,
-      selectedScenario: RuntimeLaunchScenario.fullSuccess,
+      isBusy: false,
     );
   }
 
-  final CombinedRuntimeState runtime;
-  final ProxyRuntimeSnapshot proxySnapshot;
+  final ProxyRuntimeSnapshot snapshot;
+  final ProxyLaunchConfig launchConfig;
   final List<RuntimeLogEntry> logs;
   final bool autoScrollEnabled;
-  final RuntimeFailure? latestFailure;
-  final List<RuntimeLaunchScenario> availableScenarios;
-  final RuntimeLaunchScenario selectedScenario;
+  final bool isBusy;
+  final ProxyPrepareResult? lastPrepareResult;
+  final ProxyRuntimeFailure? latestFailure;
 
-  bool get hasSimulationControls => availableScenarios.isNotEmpty;
+  bool get needsPrepare =>
+      snapshot.platform == ProxyPlatform.android &&
+      !snapshot.vpnPermissionGranted;
+
+  bool get canStartCommand {
+    return !isBusy &&
+        !snapshot.serviceActive &&
+        snapshot.state != ProxyRuntimeState.starting &&
+        snapshot.state != ProxyRuntimeState.stopping;
+  }
+
+  bool get canStopCommand {
+    return !isBusy &&
+        (snapshot.serviceActive ||
+            snapshot.state == ProxyRuntimeState.starting ||
+            snapshot.state == ProxyRuntimeState.running);
+  }
+
+  bool get isUnavailable {
+    return !snapshot.backendConnected &&
+        snapshot.platform != ProxyPlatform.android;
+  }
+
+  String get primaryStatusLabel => snapshot.honestStatusLabel;
+
+  String? get runtimeMessage {
+    if (latestFailure case final failure?) {
+      return failure.message;
+    }
+    if (snapshot.message.isEmpty) {
+      return null;
+    }
+    return snapshot.message;
+  }
+
+  List<RuntimeStatusItem> get statusItems {
+    return [
+      RuntimeStatusItem(
+        kind: RuntimeStatusKind.bridge,
+        title: 'Runtime bridge',
+        statusLabel: snapshot.backendConnected ? 'Connected' : 'Reserved',
+        tone: snapshot.backendConnected
+            ? RuntimeStatusTone.success
+            : RuntimeStatusTone.neutral,
+      ),
+      RuntimeStatusItem(
+        kind: RuntimeStatusKind.service,
+        title: 'Service lifecycle',
+        statusLabel: snapshot.state == ProxyRuntimeState.running
+            ? 'Service active'
+            : snapshot.state.label,
+        tone: snapshot.statusTone,
+        animated: snapshot.isTransitioning || snapshot.serviceActive,
+      ),
+      RuntimeStatusItem(
+        kind: RuntimeStatusKind.engine,
+        title: 'Strategy engine',
+        statusLabel: snapshot.strategyEngineReady ? 'Ready' : 'Waiting',
+        tone: snapshot.strategyEngineReady
+            ? RuntimeStatusTone.success
+            : RuntimeStatusTone.neutral,
+      ),
+      RuntimeStatusItem(
+        kind: RuntimeStatusKind.forwarder,
+        title: 'Forwarder',
+        statusLabel: snapshot.trafficForwarderReady
+            ? 'Linked to TUN'
+            : _capabilityLabel,
+        tone: snapshot.trafficForwarderReady
+            ? RuntimeStatusTone.success
+            : snapshot.packetCodecReady ||
+                  snapshot.udpForwarderReady ||
+                  snapshot.tcpForwarderReady
+            ? RuntimeStatusTone.warning
+            : RuntimeStatusTone.neutral,
+      ),
+      RuntimeStatusItem(
+        kind: RuntimeStatusKind.tunnel,
+        title: 'Tunnel',
+        statusLabel: snapshot.tunnelActive ? 'Active' : 'Off by config',
+        tone: snapshot.tunnelActive
+            ? RuntimeStatusTone.success
+            : RuntimeStatusTone.neutral,
+      ),
+    ];
+  }
+
+  String get _capabilityLabel {
+    final readyCount = [
+      snapshot.packetCodecReady,
+      snapshot.udpForwarderReady,
+      snapshot.ipv6PacketCodecReady,
+      snapshot.ipv6UdpForwarderReady,
+      snapshot.tcpForwarderReady,
+    ].where((ready) => ready).length;
+
+    if (readyCount == 0) {
+      return 'Waiting';
+    }
+    return '$readyCount/5 capabilities';
+  }
 
   RuntimeViewState copyWith({
-    CombinedRuntimeState? runtime,
-    ProxyRuntimeSnapshot? proxySnapshot,
+    ProxyRuntimeSnapshot? snapshot,
+    ProxyLaunchConfig? launchConfig,
     List<RuntimeLogEntry>? logs,
     bool? autoScrollEnabled,
-    RuntimeFailure? latestFailure,
+    bool? isBusy,
+    ProxyPrepareResult? lastPrepareResult,
+    ProxyRuntimeFailure? latestFailure,
+    bool clearPrepareResult = false,
     bool clearFailure = false,
-    List<RuntimeLaunchScenario>? availableScenarios,
-    RuntimeLaunchScenario? selectedScenario,
   }) {
     return RuntimeViewState(
-      runtime: runtime ?? this.runtime,
-      proxySnapshot: proxySnapshot ?? this.proxySnapshot,
+      snapshot: snapshot ?? this.snapshot,
+      launchConfig: launchConfig ?? this.launchConfig,
       logs: logs ?? this.logs,
       autoScrollEnabled: autoScrollEnabled ?? this.autoScrollEnabled,
+      isBusy: isBusy ?? this.isBusy,
+      lastPrepareResult: clearPrepareResult
+          ? null
+          : lastPrepareResult ?? this.lastPrepareResult,
       latestFailure: clearFailure ? null : latestFailure ?? this.latestFailure,
-      availableScenarios: availableScenarios ?? this.availableScenarios,
-      selectedScenario: selectedScenario ?? this.selectedScenario,
     );
   }
 }
 
 class RuntimeController extends Notifier<RuntimeViewState> {
-  Timer? _heartbeatTimer;
+  ProxyRuntimeController? _runtimeController;
   int _logCounter = 0;
-  int _heartbeatCounter = 0;
-  bool _rollbackScheduled = false;
   bool _disposed = false;
-
-  ProxyRuntime get _proxyRuntime => ref.read(proxyRuntimeProvider);
 
   @override
   RuntimeViewState build() {
+    final runtime = ref.read(proxyRuntimeProvider);
+    final controller = ProxyRuntimeController(runtime: runtime);
+    _runtimeController = controller;
+    controller.addListener(_syncFromRuntimeController);
+
     ref.onDispose(() {
       _disposed = true;
-      _heartbeatTimer?.cancel();
+      controller.removeListener(_syncFromRuntimeController);
+      controller.dispose();
     });
 
-    unawaited(_hydrateInitialSnapshot());
-    return RuntimeViewState.initial();
+    unawaited(Future<void>.microtask(initialize));
+    return RuntimeViewState.initial(runtime);
   }
 
-  Future<void> startAllServices() async {
-    if (state.runtime.isTransitioning) {
+  Future<void> initialize() async {
+    final controller = _runtimeController;
+    if (controller == null) {
       return;
     }
 
-    state = state.copyWith(clearFailure: true);
-
-    try {
-      final prepareResult = await _proxyRuntime.prepare();
-      _emitLog(level: RuntimeLogLevel.system, message: prepareResult.message);
-      if (!prepareResult.granted) {
-        _recordFailure(
-          RuntimeFailure(
-            code: 'proxy_prepare_denied',
-            message: 'Runtime не получил разрешение на запуск.',
-            commandType: RuntimeCommandType.start,
-            timestamp: DateTime.now(),
-          ),
-        );
-        return;
-      }
-
-      await _proxyRuntime.start(_defaultLaunchConfig);
-      await _refreshProxySnapshot();
-    } catch (error) {
-      _recordFailure(
-        RuntimeFailure(
-          code: 'proxy_start_failed',
-          message: 'Не удалось передать команду запуска.',
-          details: error.toString(),
-          commandType: RuntimeCommandType.start,
-          timestamp: DateTime.now(),
-        ),
-      );
-      return;
+    final previous = state.snapshot;
+    final loaded = await controller.initialize();
+    _syncFromRuntimeController();
+    if (loaded) {
+      _emitSnapshotChanges(previous, controller.snapshot);
+    } else {
+      _emitFailure(controller.lastFailure);
     }
-
-    _emitLog(level: RuntimeLogLevel.system, message: 'Запускаем сервисы.');
-    await _startService(BypassServiceType.nfqws);
-    await Future<void>.delayed(const Duration(milliseconds: 220));
-    await _startService(BypassServiceType.telegramProxy);
-
-    if (state.runtime.isFullyRunning) {
-      _emitLog(
-        level: RuntimeLogLevel.success,
-        message: 'Оба сервиса запущены.',
-      );
-    } else if (state.runtime.hasPartialFailure) {
-      _emitLog(
-        level: RuntimeLogLevel.warning,
-        message: 'Один сервис запустился, второй завершился с ошибкой.',
-      );
-    }
-
-    _syncHeartbeat();
   }
 
-  Future<void> stopAllServices() async {
-    if (state.runtime.isIdle) {
+  Future<void> refreshRuntime() async {
+    final controller = _runtimeController;
+    if (controller == null) {
       return;
     }
 
-    _emitLog(level: RuntimeLogLevel.system, message: 'Останавливаем сервисы.');
-    for (final service in BypassServiceType.values) {
-      final serviceState = state.runtime.stateFor(service);
-      if (serviceState.status != ServiceRuntimeStatus.idle) {
-        _updateService(
-          service,
-          ServiceRuntimeStatus.stopping,
-          clearFailure: true,
-        );
-      }
-    }
-
-    try {
-      await _proxyRuntime.stop();
-      await _refreshProxySnapshot();
-    } catch (error) {
-      _recordFailure(
-        RuntimeFailure(
-          code: 'proxy_stop_failed',
-          message: 'Не удалось передать команду остановки.',
-          details: error.toString(),
-          commandType: RuntimeCommandType.stop,
-          timestamp: DateTime.now(),
-        ),
+    final previous = state.snapshot;
+    final refreshed = await controller.refresh();
+    _syncFromRuntimeController();
+    if (refreshed) {
+      _emitSnapshotChanges(previous, controller.snapshot);
+      _emitLog(
+        level: RuntimeLogLevel.system,
+        source: RuntimeLogSource.bridge,
+        message: 'Snapshot обновлен.',
       );
+    } else {
+      _emitFailure(controller.lastFailure);
     }
+  }
 
-    await Future<void>.delayed(const Duration(milliseconds: 360));
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
-
-    for (final service in BypassServiceType.values) {
-      _updateService(service, ServiceRuntimeStatus.idle, clearFailure: true);
+  Future<void> startRuntime() async {
+    final controller = _runtimeController;
+    if (controller == null || !state.canStartCommand) {
+      return;
     }
 
     _emitLog(
       level: RuntimeLogLevel.system,
-      message: 'Все сервисы остановлены.',
+      source: RuntimeLogSource.app,
+      message: state.needsPrepare
+          ? 'Запрашиваем подготовку runtime.'
+          : 'Передаем команду запуска runtime.',
     );
+
+    if (state.needsPrepare) {
+      final prepare = await controller.prepare();
+      _syncFromRuntimeController();
+      if (prepare == null) {
+        _emitFailure(controller.lastFailure);
+        return;
+      }
+
+      _emitLog(
+        level: prepare.granted
+            ? RuntimeLogLevel.success
+            : RuntimeLogLevel.warning,
+        source: RuntimeLogSource.bridge,
+        message: prepare.message,
+      );
+      if (!prepare.granted) {
+        return;
+      }
+    }
+
+    final previous = state.snapshot;
+    final started = await controller.start();
+    _syncFromRuntimeController();
+    if (!started) {
+      _emitFailure(controller.lastFailure);
+      return;
+    }
+
+    _emitLog(
+      level: RuntimeLogLevel.system,
+      source: RuntimeLogSource.runtime,
+      message: 'Команда запуска принята runtime adapter.',
+    );
+    _emitSnapshotChanges(previous, controller.snapshot);
+  }
+
+  Future<void> stopRuntime() async {
+    final controller = _runtimeController;
+    if (controller == null || !state.canStopCommand) {
+      return;
+    }
+
+    _emitLog(
+      level: RuntimeLogLevel.system,
+      source: RuntimeLogSource.app,
+      message: 'Передаем команду остановки runtime.',
+    );
+
+    final previous = state.snapshot;
+    final stopped = await controller.stop();
+    _syncFromRuntimeController();
+    if (!stopped) {
+      _emitFailure(controller.lastFailure);
+      return;
+    }
+
+    _emitLog(
+      level: RuntimeLogLevel.system,
+      source: RuntimeLogSource.runtime,
+      message: 'Runtime остановлен через adapter.',
+    );
+    _emitSnapshotChanges(previous, controller.snapshot);
   }
 
   void clearLogs() {
@@ -206,169 +321,86 @@ class RuntimeController extends Notifier<RuntimeViewState> {
     state = state.copyWith(autoScrollEnabled: value);
   }
 
-  Future<void> setSimulationScenario(RuntimeLaunchScenario scenario) async {
-    if (state.selectedScenario == scenario) {
+  void _syncFromRuntimeController() {
+    final controller = _runtimeController;
+    if (_disposed || controller == null) {
       return;
     }
 
-    if (state.runtime.hasActiveServices) {
-      _emitLog(
-        level: RuntimeLogLevel.warning,
-        message: 'Для смены сценария сначала остановим активные сервисы.',
-      );
-      await stopAllServices();
-    }
-
-    state = state.copyWith(selectedScenario: scenario);
-    _emitLog(
-      level: RuntimeLogLevel.info,
-      message: 'Выбран сценарий: ${scenario.title}.',
+    state = state.copyWith(
+      snapshot: controller.snapshot,
+      launchConfig: controller.launchConfig,
+      isBusy: controller.isBusy,
+      lastPrepareResult: controller.lastPrepareResult,
+      latestFailure: controller.lastFailure,
+      clearFailure: controller.lastFailure == null,
     );
   }
 
-  Future<void> _hydrateInitialSnapshot() async {
-    try {
-      final snapshot = await _proxyRuntime.getSnapshot();
-      if (!_disposed) {
-        state = state.copyWith(proxySnapshot: snapshot);
-      }
-    } catch (_) {
-      if (!_disposed) {
-        state = state.copyWith(
-          proxySnapshot: ProxyRuntimeSnapshot.disconnected(
-            _currentProxyPlatform(),
-          ),
-        );
-      }
-    }
-
-    _emitLog(
-      level: RuntimeLogLevel.system,
-      message: 'Система готова к запуску.',
-    );
-  }
-
-  Future<void> _refreshProxySnapshot() async {
-    final snapshot = await _proxyRuntime.getSnapshot();
-    if (!_disposed) {
-      state = state.copyWith(proxySnapshot: snapshot);
-    }
-  }
-
-  Future<void> _startService(BypassServiceType serviceType) async {
-    final currentState = state.runtime.stateFor(serviceType);
-    if (currentState.status == ServiceRuntimeStatus.running) {
+  void _emitFailure(ProxyRuntimeFailure? failure) {
+    if (failure == null) {
       return;
     }
 
-    _updateService(
-      serviceType,
-      ServiceRuntimeStatus.starting,
-      clearFailure: true,
-    );
-    _emitLog(
-      level: RuntimeLogLevel.info,
-      serviceType: serviceType,
-      message: 'Подготавливаем ${serviceType.title.toLowerCase()}.',
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 420));
-
-    if (_shouldSucceed(serviceType)) {
-      _updateService(
-        serviceType,
-        ServiceRuntimeStatus.running,
-        clearFailure: true,
-      );
-      _emitLog(
-        level: RuntimeLogLevel.success,
-        serviceType: serviceType,
-        message: '${serviceType.shortTitle} вошёл в рабочий режим.',
-      );
-      return;
-    }
-
-    final failure = RuntimeFailure(
-      code: 'stub_launch_failed',
-      message: '${serviceType.title} не смог завершить запуск.',
-      details: 'Сервис остался в состоянии ошибки для проверки UX.',
-      commandType: RuntimeCommandType.start,
-      serviceType: serviceType,
-      timestamp: DateTime.now(),
-    );
-    _recordFailure(failure);
-    _updateService(
-      serviceType,
-      ServiceRuntimeStatus.failed,
-      failure: failure,
-      clearFailure: true,
-    );
     _emitLog(
       level: RuntimeLogLevel.error,
-      serviceType: serviceType,
-      message: '${serviceType.shortTitle} вернул ошибку запуска.',
-    );
-  }
-
-  bool _shouldSucceed(BypassServiceType serviceType) {
-    return switch (state.selectedScenario) {
-      RuntimeLaunchScenario.fullSuccess => true,
-      RuntimeLaunchScenario.nfqwsOnly => serviceType == BypassServiceType.nfqws,
-      RuntimeLaunchScenario.telegramOnly =>
-        serviceType == BypassServiceType.telegramProxy,
-    };
-  }
-
-  void _updateService(
-    BypassServiceType type,
-    ServiceRuntimeStatus status, {
-    RuntimeFailure? failure,
-    bool clearFailure = false,
-  }) {
-    final nextState = state.runtime.withServiceState(
-      type,
-      status,
-      failure: failure,
-      clearFailure: clearFailure,
-    );
-    state = state.copyWith(runtime: nextState);
-    _scheduleRollbackIfNeeded(nextState);
-  }
-
-  void _recordFailure(RuntimeFailure failure) {
-    state = state.copyWith(latestFailure: failure);
-    _emitLog(
-      level: RuntimeLogLevel.error,
-      serviceType: failure.serviceType,
+      source: RuntimeLogSource.bridge,
       message: failure.message,
     );
   }
 
-  void _scheduleRollbackIfNeeded(CombinedRuntimeState nextState) {
-    if (_rollbackScheduled || !nextState.hasPartialFailure) {
-      return;
+  void _emitSnapshotChanges(
+    ProxyRuntimeSnapshot previous,
+    ProxyRuntimeSnapshot next,
+  ) {
+    if (previous.state != next.state) {
+      _emitLog(
+        level: next.hasFailure ? RuntimeLogLevel.error : RuntimeLogLevel.info,
+        source: RuntimeLogSource.runtime,
+        message: 'Состояние runtime: ${next.honestStatusLabel}.',
+      );
     }
 
-    _rollbackScheduled = true;
-    unawaited(
-      Future<void>.delayed(
-        AppMotionDurations.slow + const Duration(milliseconds: 240),
-      ).then((_) async {
-        if (_disposed) {
-          return;
-        }
+    if (!previous.strategyEngineReady && next.strategyEngineReady) {
+      _emitLog(
+        level: RuntimeLogLevel.success,
+        source: RuntimeLogSource.runtime,
+        message: 'Strategy engine готов.',
+      );
+    }
 
-        if (state.runtime.hasPartialFailure) {
-          await stopAllServices();
-        }
-        _rollbackScheduled = false;
-      }),
-    );
+    if (!previous.trafficForwarderReady && next.trafficForwarderReady) {
+      _emitLog(
+        level: RuntimeLogLevel.success,
+        source: RuntimeLogSource.runtime,
+        message: 'Userspace forwarder связан с TUN.',
+      );
+    }
+
+    if (!previous.tunnelActive && next.tunnelActive) {
+      _emitLog(
+        level: RuntimeLogLevel.success,
+        source: RuntimeLogSource.runtime,
+        message: 'TUN fd активен.',
+      );
+    }
+
+    if (next.state == ProxyRuntimeState.running &&
+        next.serviceActive &&
+        !next.tunnelActive &&
+        !previous.serviceActive) {
+      _emitLog(
+        level: RuntimeLogLevel.info,
+        source: RuntimeLogSource.runtime,
+        message: 'Foreground service активен; туннель не поднят.',
+      );
+    }
   }
 
   void _emitLog({
     required RuntimeLogLevel level,
     required String message,
-    BypassServiceType? serviceType,
+    RuntimeLogSource? source,
   }) {
     _logCounter += 1;
     final nextLogs = [
@@ -378,7 +410,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
         timestamp: DateTime.now(),
         level: level,
         message: message,
-        serviceType: serviceType,
+        source: source,
       ),
     ];
     if (nextLogs.length > 240) {
@@ -386,51 +418,4 @@ class RuntimeController extends Notifier<RuntimeViewState> {
     }
     state = state.copyWith(logs: nextLogs);
   }
-
-  void _syncHeartbeat() {
-    final runningServices = state.runtime.orderedServices
-        .where((service) => service.status == ServiceRuntimeStatus.running)
-        .toList(growable: false);
-    if (runningServices.isEmpty) {
-      _heartbeatTimer?.cancel();
-      _heartbeatTimer = null;
-      return;
-    }
-
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 2), (_) {
-      final service =
-          runningServices[_heartbeatCounter % runningServices.length];
-      final payload = switch (_heartbeatCounter % 4) {
-        0 => 'Соединение держится стабильно.',
-        1 => 'Сервис отвечает без задержек.',
-        2 => 'Трафик проходит через активный маршрут.',
-        _ => 'Сервис подтверждает готовность.',
-      };
-
-      _heartbeatCounter += 1;
-      _emitLog(
-        level: RuntimeLogLevel.info,
-        serviceType: service.type,
-        message: payload,
-      );
-    });
-  }
-}
-
-const _defaultLaunchConfig = ProxyLaunchConfig(
-  localHost: '127.0.0.1',
-  localPort: 1080,
-  poolSize: 8,
-  cloudflareEnabled: true,
-  secret: 'qnzapret-preview',
-);
-
-ProxyPlatform _currentProxyPlatform() {
-  return switch (defaultTargetPlatform) {
-    TargetPlatform.android => ProxyPlatform.android,
-    TargetPlatform.linux => ProxyPlatform.linux,
-    TargetPlatform.windows => ProxyPlatform.windows,
-    _ => ProxyPlatform.android,
-  };
 }

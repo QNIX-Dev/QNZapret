@@ -205,7 +205,7 @@ class _AnimatedLogLineState extends State<_AnimatedLogLine>
       curve: AppMotionCurves.decelerate,
     );
     final timestamp = _formatTime(widget.entry.timestamp);
-    final serviceLabel = widget.entry.serviceType?.shortTitle ?? 'Система';
+    final sourceLabel = widget.entry.source?.shortTitle ?? 'Система';
 
     return FadeTransition(
       opacity: animation,
@@ -235,7 +235,7 @@ class _AnimatedLogLineState extends State<_AnimatedLogLine>
                     style: TextStyle(color: extras.terminalMutedText),
                   ),
                   TextSpan(
-                    text: '[$serviceLabel] ',
+                    text: '[$sourceLabel] ',
                     style: TextStyle(
                       color: levelColor,
                       fontWeight: FontWeight.w700,

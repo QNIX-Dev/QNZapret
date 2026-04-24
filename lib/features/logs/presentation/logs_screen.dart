@@ -142,8 +142,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
       final hh = entry.timestamp.hour.toString().padLeft(2, '0');
       final mm = entry.timestamp.minute.toString().padLeft(2, '0');
       final ss = entry.timestamp.second.toString().padLeft(2, '0');
-      final service = entry.serviceType?.shortTitle ?? 'Система';
-      buffer.writeln('[$hh:$mm:$ss] [$service] ${entry.message}');
+      final source = entry.source?.shortTitle ?? 'Система';
+      buffer.writeln('[$hh:$mm:$ss] [$source] ${entry.message}');
     }
     return buffer.toString().trimRight();
   }
@@ -269,7 +269,7 @@ class _LogsHeroTitle extends StatelessWidget {
         Text('Логи', style: theme.textTheme.displayMedium),
         const SizedBox(height: AppSpacing.xs),
         Text(
-          'Здесь появляются последние сообщения сервисов.',
+          'Здесь появляются последние сообщения runtime.',
           style: theme.textTheme.bodyLarge?.copyWith(
             color: extras.mutedForeground,
           ),
@@ -304,7 +304,7 @@ class _LogFacts extends StatelessWidget {
             subtitle: 'прокрутка',
           ),
           _LogFact(
-            title: runtimeView.runtime.summaryStatus.label,
+            title: runtimeView.primaryStatusLabel,
             subtitle: 'состояние',
           ),
         ],

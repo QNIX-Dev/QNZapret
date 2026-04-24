@@ -3,26 +3,28 @@ import 'package:flutter/services.dart';
 import 'proxy_runtime.dart';
 
 final class AndroidProxyRuntime implements ProxyRuntime {
-  AndroidProxyRuntime({
-    MethodChannel channel = const MethodChannel(
-      'dev.quriee.qnzapret/proxy_runtime',
-    ),
-  }) : _channel = channel;
+  const AndroidProxyRuntime({MethodChannel? channel})
+    : _channel = channel ?? const MethodChannel(_channelName);
+
+  static const _channelName = 'dev.qnzapret/proxy_runtime';
 
   final MethodChannel _channel;
 
   @override
+  ProxyPlatform get platform => ProxyPlatform.android;
+
+  @override
   Future<ProxyPrepareResult> prepare() async {
-    final result = await _channel.invokeMapMethod<Object?, Object?>('prepare');
-    return ProxyPrepareResult.fromMap(result ?? const {});
+    final result = await _channel.invokeMapMethod<String, Object?>('prepare');
+    return ProxyPrepareResult.fromMap(result ?? const <String, Object?>{});
   }
 
   @override
   Future<ProxyRuntimeSnapshot> getSnapshot() async {
-    final result = await _channel.invokeMapMethod<Object?, Object?>(
+    final result = await _channel.invokeMapMethod<String, Object?>(
       'getSnapshot',
     );
-    return ProxyRuntimeSnapshot.fromMap(result ?? const {});
+    return ProxyRuntimeSnapshot.fromMap(result ?? const <String, Object?>{});
   }
 
   @override

@@ -7,12 +7,12 @@ import '../design_tokens.dart';
 
 class RuntimeStatusChip extends StatelessWidget {
   const RuntimeStatusChip({
-    required this.serviceState,
+    required this.statusItem,
     super.key,
     this.expanded = false,
   });
 
-  final ServiceRuntimeState serviceState;
+  final RuntimeStatusItem statusItem;
   final bool expanded;
 
   @override
@@ -20,9 +20,12 @@ class RuntimeStatusChip extends StatelessWidget {
     final theme = Theme.of(context);
     final extras = context.appThemeExtras;
     final tone = _toneForState(theme, extras);
-    final icon = switch (serviceState.type) {
-      BypassServiceType.nfqws => Icons.shield_rounded,
-      BypassServiceType.telegramProxy => Icons.send_rounded,
+    final icon = switch (statusItem.kind) {
+      RuntimeStatusKind.bridge => Icons.hub_rounded,
+      RuntimeStatusKind.service => Icons.power_settings_new_rounded,
+      RuntimeStatusKind.engine => Icons.memory_rounded,
+      RuntimeStatusKind.forwarder => Icons.route_rounded,
+      RuntimeStatusKind.tunnel => Icons.vpn_lock_rounded,
     };
 
     final chip = AnimatedContainer(
@@ -52,7 +55,7 @@ class RuntimeStatusChip extends StatelessWidget {
           if (expanded)
             Expanded(
               child: Text(
-                serviceState.type.title,
+                statusItem.title,
                 style: theme.textTheme.titleMedium,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -60,7 +63,7 @@ class RuntimeStatusChip extends StatelessWidget {
           else
             Flexible(
               child: Text(
-                serviceState.type.title,
+                statusItem.title,
                 style: theme.textTheme.titleMedium,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -77,13 +80,10 @@ class RuntimeStatusChip extends StatelessWidget {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _StatusDot(
-                  color: tone,
-                  animated: serviceState.status.isBusy || serviceState.isActive,
-                ),
+                _StatusDot(color: tone, animated: statusItem.animated),
                 const SizedBox(width: 8),
                 Text(
-                  serviceState.status.label,
+                  statusItem.statusLabel,
                   style: theme.textTheme.labelLarge?.copyWith(color: tone),
                 ),
               ],
@@ -97,12 +97,12 @@ class RuntimeStatusChip extends StatelessWidget {
   }
 
   Color _toneForState(ThemeData theme, AppThemeExtras extras) {
-    return switch (serviceState.status) {
-      ServiceRuntimeStatus.idle => theme.colorScheme.primary,
-      ServiceRuntimeStatus.starting => theme.colorScheme.secondary,
-      ServiceRuntimeStatus.running => extras.success,
-      ServiceRuntimeStatus.stopping => extras.warning,
-      ServiceRuntimeStatus.failed => extras.danger,
+    return switch (statusItem.tone) {
+      RuntimeStatusTone.neutral => theme.colorScheme.primary,
+      RuntimeStatusTone.info => theme.colorScheme.secondary,
+      RuntimeStatusTone.success => extras.success,
+      RuntimeStatusTone.warning => extras.warning,
+      RuntimeStatusTone.danger => extras.danger,
     };
   }
 }
