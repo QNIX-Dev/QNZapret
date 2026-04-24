@@ -65,6 +65,7 @@
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
@@ -134,6 +135,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - домен вне hostlists должен проходить direct forwarding без fake/split/udpFake действий
 - TCP hostlist match должен применять `split` как best-effort stream write split и не отправлять небезопасный TCP `fake` в protected socket mode
 - TCP relay должен игнорировать full duplicate retransmits, форвардить только новый tail при overlap retransmit, ACK/drop out-of-order payload без продвижения окна и чистить idle sessions
+- QUIC hostlist match должен применять `udpFake`, когда UDP/443 Initial получает `knownHost` из UDP/53 DNS response или prior TCP HTTP/TLS host correlation
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
 
@@ -210,7 +212,7 @@ Backend реализует platform adapter так, чтобы наружу он
 ## Предлагаемый порядок следующих задач
 
 1. Добить оставшийся TCP hardening: out-of-order buffering, write backpressure, расширенная диагностика и Android device smoke при `establishTunnel=true`.
-2. Добавить QUIC host correlation для hostlist-based `udpFake`.
-3. Добавить production log stream поверх текущего `ProxyRuntimeController`.
+2. Добавить production log stream поверх текущего `ProxyRuntimeController`.
+3. Расширить QUIC correlation для DoH/DoT, DNS cache misses и сложных multi-IP сценариев.
 4. Расширить diagnostics snapshot, если UI понадобится больше runtime health-полей.
 5. После Android описать equivalent bridge strategy для Linux и Windows.

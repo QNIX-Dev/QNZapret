@@ -24,6 +24,7 @@
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
@@ -210,7 +211,7 @@ Native strategy engine сейчас умеет:
 - лениво загружать hostlists из Android assets и матчить exact/suffix домены
 - загружать бинарные payload blobs по ключам `tls_google` и `quic_google`
 - детектить HTTP Host и TLS ClientHello SNI из первого payload chunk
-- распознавать базовый QUIC Initial marker, но без DNS/SNI correlation пока не применяет hostlist desync к QUIC, если host заранее неизвестен
+- распознавать базовый QUIC Initial marker и применять hostlist desync, если `knownHost` пришел из QUIC host correlation
 - возвращать `DIRECT` для unmatched traffic, missing host и неподдержанного протокола
 - возвращать `DESYNC` с resolved actions и payload bytes для matched HTTP/TLS правил
 
@@ -222,6 +223,7 @@ Userspace forwarding foundation сейчас умеет:
 - синтезировать IPv4/IPv6 UDP response packets и писать их обратно в TUN output
 - вызывать `StrategyRuntimeEngine.evaluate()` перед отправкой UDP datagram
 - отправлять `udpFake` payload repeats перед реальным datagram, если decision уже содержит такую action
+- вести best-effort QUIC host correlation: UDP/53 DNS A/AAAA responses и первый TCP HTTP/TLS host hint сохраняют `destination IP -> host`, а UDP/443 QUIC Initial получает этот host как `knownHost` перед вызовом strategy engine
 - выделять TCP segments и flow tuple
 - отвечать на TCP SYN из TUN через synthetic SYN/ACK, вести client/server sequence numbers, ACK, FIN и RST
 - открывать protected `Socket`, чтобы исходящий IPv4/IPv6 TCP stream не возвращался обратно в VPN
@@ -236,7 +238,7 @@ Userspace forwarding foundation сейчас умеет:
 - TCP relay/state machine является foundation-реализацией без out-of-order buffering, полноценного retransmit/reassembly, congestion control, write backpressure и расширенной диагностики
 - TUN default-route не включается по умолчанию, потому что `ProxyLaunchConfig.defaultAndroidStrategy.establishTunnel=false`; при явном `establishTunnel=true` он включается только если TCP/UDP capabilities готовы
 - IPv6 extension headers пока не разворачиваются, foundation обрабатывает прямой IPv6 UDP/TCP `nextHeader`
-- QUIC host detection пока не связывает QUIC Initial с доменом без внешней DNS/SNI correlation, поэтому hostlist-based `udpFake` обычно не сработает сам по себе
+- QUIC correlation является best-effort: она покрывает обычный UDP/53 DNS path и prior TCP HTTP/TLS host hints, но не видит DoH/DoT, DNS cache misses, pre-existing OS cache до старта VPN и сложные случаи, где QUIC IP отличается от уже связанного host
 - TCP `fake` поверх обычного protected socket не считается безопасным no-root действием, потому что без raw fooling пакет увидит настоящий сервер
 - TCP `split` через обычный socket является best-effort: отдельные `OutputStream.write()` не гарантируют сохранение TCP packet boundaries на всех сетевых стеках
 
