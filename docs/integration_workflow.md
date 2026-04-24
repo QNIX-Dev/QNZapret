@@ -32,6 +32,8 @@
 - theme
 - presentation layer
 - адаптацию runtime snapshot в экранное поведение
+- продуктовый Home/Logs/Settings shell
+- локализацию user-facing runtime/status/log сообщений
 
 ### Backend
 
@@ -104,14 +106,17 @@ Backend реализует platform adapter так, чтобы наружу он
 
 ### Этап 3. Подключение в composition/UI
 
-Стартовый экран получает `ProxyRuntime` из composition root и работает с ним через `ProxyRuntimeController`.
+Composition root создает `ProxyRuntime` и передает его через Riverpod provider.
+Экранный слой работает через `RuntimeController`, который внутри использует `ProxyRuntimeController`.
 Фронтендеру не нужно вызывать `MethodChannel` или Android classes напрямую.
 
 Ожидаемый принцип:
 
 - `main.dart` создает runtime через `createDefaultProxyRuntime()`
-- `QnzapretApp` принимает `ProxyRuntime`
-- UI создает или получает `ProxyRuntimeController`
+- `main.dart` переопределяет `proxyRuntimeProvider`
+- `QnzapretApp` открывает `AppShell`
+- `AppShell` управляет Home/Logs навигацией и settings route
+- UI получает runtime state через `runtimeControllerProvider`
 - кнопки и индикаторы используют `initialize`, `prepare`, `start`, `stop`, `refresh`, `isBusy`, `needsPrepare`, `canStart`, `canStop`, `lastFailure`
 
 Если контракт не сломан, экранный слой не должен знать Kotlin/Android details.
@@ -194,7 +199,10 @@ Backend реализует platform adapter так, чтобы наружу он
 
 - Android adapter реализует текущий `ProxyRuntime` contract
 - composition root передает Android `AndroidProxyRuntime` на Android и stub-адаптеры на desktop
-- UI может работать через `ProxyRuntimeController` без platform-specific кода
+- UI может работать через `RuntimeController` / `ProxyRuntimeController` без platform-specific кода
+- Home показывает русские status chips и CTA запуска/остановки сервисов на основе snapshot
+- Logs показывает runtime-controller events и готов к будущему native log stream
+- Settings сохраняет theme mode, palette и не зависит от backend lifecycle
 - VPN permission flow стабильно проходит через `prepare()`
 - Android foreground service стартует и останавливается через Dart API
 - `getSnapshot()` отражает реальные Android lifecycle transitions

@@ -12,19 +12,60 @@ lib/
   main.dart
   app/
     app.dart
+    navigation/
+      app_shell.dart
+      floating_navigation_bar.dart
+    routing/
+      app_destination.dart
     theme/
       app_theme.dart
   core/
+    app_metadata.dart
     backend/
       backend.dart
       android_proxy_runtime.dart
       proxy_runtime.dart
       proxy_runtime_controller.dart
       proxy_runtime_factory.dart
+    motion/
+      app_motion.dart
+    persistence/
+      shared_preferences_provider.dart
+    state/
+      app_settings_controller.dart
+      package_info_provider.dart
+      runtime_controller.dart
+      runtime_view_models.dart
+    ui/
+      app_backdrop.dart
+      design_tokens.dart
+      components/
+        connected_flow_illustration.dart
+        palette_preview_card.dart
+        premium_cta_button.dart
+        settings_section_card.dart
+        staggered_reveal.dart
+        status_chip.dart
+        terminal_illustration.dart
+        terminal_surface.dart
   features/
     home/
       presentation/
         home_screen.dart
+    logs/
+      presentation/
+        logs_screen.dart
+    settings/
+      presentation/
+        settings_screen.dart
+
+assets/
+  branding/
+    app_icon/
+      qnzapret_app_icon_source.png
+      generated/qnzapret_app_icon_fullbleed.png
+    logo/
+      qnzapret_logo.png
 
 android/
   app/
@@ -66,6 +107,7 @@ android/
         TcpRelayStateTest.kt
 
 linux/
+  runner/resources/app_icon.png
 windows/
 test/
 ```
@@ -73,7 +115,8 @@ test/
 ## Слой `lib/main.dart`
 
 Минимальный bootstrap приложения.
-Здесь создается runtime через `createDefaultProxyRuntime()` и передается в `QnzapretApp`.
+Здесь создается runtime через `createDefaultProxyRuntime()` и передается в приложение через Riverpod override `proxyRuntimeProvider`.
+Также здесь поднимается `SharedPreferences` и передается через `sharedPreferencesProvider`.
 Логика фич и platform-specific детали здесь жить не должны.
 
 ## Слой `lib/app/`
@@ -83,17 +126,26 @@ test/
 - app-level composition
 - корневой `MaterialApp`
 - общая тема приложения
+- shell-навигация
+- top-level routing между Home/Logs
+- adaptive settings route
 
 Текущие файлы:
 
 - `lib/app/app.dart`
   Корневая конфигурация приложения.
-  Получает готовый `ProxyRuntime` и передает его в стартовый экран.
+  Читает настройки темы из `AppSettingsController` и открывает `AppShell`.
+- `lib/app/navigation/app_shell.dart`
+  Общий shell приложения: `PageView`, swipe/tap navigation между Home и Logs, settings route и safe-area/layout padding.
+- `lib/app/navigation/floating_navigation_bar.dart`
+  Плавающий navigation island с blur-surface, focus pill и haptic feedback.
+- `lib/app/routing/app_destination.dart`
+  Перечень основных вкладок приложения.
 - `lib/app/theme/app_theme.dart`
-  Общая визуальная система, цвета и типографика.
+  Общая визуальная система, 6 цветовых палитр, light/dark варианты, typography, Material 3 theme extensions.
 
-Текущий UI намеренно оформлен как продуктовый shell, а не стандартное Flutter demo.
-Без явной необходимости этот слой лучше не перестраивать, потому что UI-направление развивается отдельно.
+Текущий UI намеренно оформлен как продуктовый shell, а не стандартное Flutter demo или презентационный стенд.
+Без явной необходимости этот слой лучше не перестраивать, потому что UI-направление уже связано с runtime-состояниями и responsive layout.
 
 ## Слой `lib/core/backend/`
 
@@ -129,9 +181,62 @@ test/
 - Новые platform adapters нужно добавлять за тем же контрактом или через его осознанное расширение.
 - Если контракт меняется, одновременно обновляются код, `docs/runtime_bridge_contract.md` и при необходимости `AGENTS.md`.
 
+## Слой `lib/core/state/`
+
+Это application-state прослойка между runtime contract, persistence и UI.
+
+Файлы:
+
+- `app_settings_controller.dart`
+  Хранит режим темы, выбранную палитру и последнюю открытую вкладку. Использует `SharedPreferences`.
+- `runtime_controller.dart`
+  Riverpod controller над `ProxyRuntimeController`: инициализирует runtime, запускает `prepare/start/stop/refresh`, собирает локальные diagnostic logs и адаптирует snapshot в состояние UI.
+- `runtime_view_models.dart`
+  UI-friendly модели: status item, log entry, tone, source labels, честные пользовательские подписи для `ProxyRuntimeState` и `ProxyRuntimeSnapshot`.
+- `package_info_provider.dart`
+  Дает UI доступ к версии приложения.
+
+Правила:
+
+- Presentation layer должен читать runtime через `runtimeControllerProvider`, а не создавать platform controller прямо в виджетах.
+- User-facing подписи состояния должны жить здесь или в UI-компонентах, а не в Android/Kotlin wire protocol.
+- `running` не должен трактоваться как fully active tunnel без проверки `tunnelActive` и `trafficForwarderReady`.
+
+## Слой `lib/core/ui/`
+
+Общие UI building blocks и design tokens.
+
+Файлы:
+
+- `design_tokens.dart`
+  Breakpoints, spacing, radii, elevations.
+- `app_backdrop.dart`
+  Общий фон приложения, связанный с активной палитрой.
+- `components/status_chip.dart`
+  Runtime status chips для Home.
+- `components/premium_cta_button.dart`
+  CTA запуска/остановки сервисов.
+- `components/connected_flow_illustration.dart`
+  Иллюстрация состояния соединения на Home.
+- `components/terminal_illustration.dart`
+  Иллюстрация терминала для Logs.
+- `components/terminal_surface.dart`
+  UI терминала с логами, copy/clear/autoscroll.
+- `components/staggered_reveal.dart`
+  Viewport-based reveal-анимации.
+- `components/palette_preview_card.dart`
+  Preview карточки цветовых палитр.
+- `components/settings_section_card.dart`
+  Общая surface-обертка секций настроек.
+
+## Слой `lib/core/motion/`
+
+`app_motion.dart` содержит общие duration/easing tokens.
+Новые анимации должны использовать эти токены, а не случайные локальные curve/duration.
+
 ## Слой `lib/features/home/`
 
-Текущий стартовый продуктовый экран.
+Главная вкладка продукта.
 
 Файл:
 
@@ -141,11 +246,63 @@ test/
 
 - брендированный первый экран QNZapret
 - текущий runtime snapshot
-- поддерживаемые платформы
-- ближайшие backend milestones
+- компактные runtime status chips
+- CTA запуска/остановки сервисов
+- честное состояние сервиса, ядра обхода, передачи и TUN
+- иллюстрацию connected flow
 
-Сейчас экран получает `ProxyRuntime` из composition root и оборачивает его в `ProxyRuntimeController`.
-На Android это уже `AndroidProxyRuntime`; на desktop-платформах пока остаются stub-адаптеры того же контракта.
+Сейчас экран читает `runtimeControllerProvider`.
+На Android под ним работает `AndroidProxyRuntime`; на desktop-платформах пока остаются stub-адаптеры того же контракта.
+
+## Слой `lib/features/logs/`
+
+Вкладка логов и диагностических событий.
+
+Файл:
+
+- `lib/features/logs/presentation/logs_screen.dart`
+
+Экран показывает:
+
+- human-readable runtime/controller events
+- terminal-like surface
+- количество строк
+- состояние автопрокрутки
+- текущий runtime status
+- copy/clear controls
+
+Важно: это уже продуктовый UI для логов, но источник событий пока application/runtime-controller слой. Production log stream из native backend еще нужно подключить отдельным контрактным изменением.
+
+## Слой `lib/features/settings/`
+
+Экран настроек.
+
+Файл:
+
+- `lib/features/settings/presentation/settings_screen.dart`
+
+Экран показывает:
+
+- бренд/логотип и версию приложения
+- выбор режима темы: системная, светлая, темная
+- выбор одной из 6 цветовых палитр
+- блок "О приложении"
+- внешние CTA
+
+На телефонах настройки открываются как отдельная page route, на больших экранах - как dialog/panel.
+
+## Слой `assets/branding/`
+
+Брендовые ассеты продукта.
+
+- `assets/branding/app_icon/qnzapret_app_icon_source.png`
+  Исходник иконки приложения.
+- `assets/branding/app_icon/generated/qnzapret_app_icon_fullbleed.png`
+  Full-bleed источник для launcher icons.
+- `assets/branding/logo/qnzapret_logo.png`
+  Логотип для интерфейса.
+
+Android launcher icons, Windows icon и Linux window icon должны генерироваться или обновляться из этих источников согласованно.
 
 ## Android слой
 
@@ -237,7 +394,8 @@ Channel:
 
 - `flutter analyze`
 - `flutter test`
-- `cd android; .\gradlew.bat :app:testDebugUnitTest`
+- `cd android && ./gradlew test` на Linux/macOS
+- `cd android; .\gradlew.bat test` на Windows
 
 ## Границы ответственности
 
@@ -247,6 +405,7 @@ Frontend отвечает за:
 - theme
 - presentation layer
 - product flows
+- адаптацию snapshot/log events в человекочитаемые состояния
 
 Backend отвечает за:
 
@@ -254,7 +413,7 @@ Backend отвечает за:
 - platform adapters
 - запуск и остановку нативного runtime
 - Android service lifecycle
-- future logs/status/failure delivery
+- native logs/status/failure delivery
 
 Shared responsibility:
 
@@ -262,6 +421,7 @@ Shared responsibility:
 - lifecycle semantics
 - перечень поддерживаемых платформ
 - фиксация изменений в документации
+- локализация user-facing сообщений, которые приходят из native runtime в UI
 
 ## Что нельзя делать
 
