@@ -6,9 +6,12 @@ final class AndroidProxyRuntime implements ProxyRuntime {
   const AndroidProxyRuntime({MethodChannel? channel})
     : _channel = channel ?? const MethodChannel(_channelName);
 
-  static const _channelName = 'dev.quriee.qnzapret/proxy_runtime';
+  static const _channelName = 'dev.qnzapret/proxy_runtime';
 
   final MethodChannel _channel;
+
+  @override
+  ProxyPlatform get platform => ProxyPlatform.android;
 
   @override
   Future<ProxyPrepareResult> prepare() async {
