@@ -13,6 +13,7 @@ class StaggeredReveal extends StatefulWidget {
     this.beginOffset = const Offset(0, 0.06),
     this.visitToken = 0,
     this.minVisibleFraction = 0.24,
+    this.immediate = false,
   });
 
   final Widget child;
@@ -20,6 +21,7 @@ class StaggeredReveal extends StatefulWidget {
   final Offset beginOffset;
   final int visitToken;
   final double minVisibleFraction;
+  final bool immediate;
 
   @override
   State<StaggeredReveal> createState() => _StaggeredRevealState();
@@ -48,6 +50,15 @@ class _StaggeredRevealState extends State<StaggeredReveal>
   @override
   void initState() {
     super.initState();
+    if (widget.immediate) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        _scheduleReveal();
+      });
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
@@ -72,6 +83,16 @@ class _StaggeredRevealState extends State<StaggeredReveal>
   @override
   void didUpdateWidget(covariant StaggeredReveal oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.immediate != widget.immediate && widget.immediate) {
+      _resetReveal();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        _scheduleReveal();
+      });
+      return;
+    }
     if (oldWidget.visitToken != widget.visitToken) {
       _resetReveal();
       WidgetsBinding.instance.addPostFrameCallback((_) {

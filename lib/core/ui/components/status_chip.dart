@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_theme.dart';
-import '../../backend/runtime_models.dart';
 import '../../motion/app_motion.dart';
+import '../../state/runtime_view_models.dart';
 import '../design_tokens.dart';
 
 class RuntimeStatusChip extends StatelessWidget {

@@ -112,6 +112,10 @@ class AppSettingsController extends Notifier<AppSettingsState> {
       return AppPaletteId.roseOfDune;
     }
 
+    if (rawValue == 'emberwave') {
+      return AppPaletteId.everforest;
+    }
+
     for (final palette in AppPaletteId.values) {
       if (palette.name == rawValue) {
         return palette;

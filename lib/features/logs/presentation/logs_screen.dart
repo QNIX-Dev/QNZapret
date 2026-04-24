@@ -3,9 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_theme.dart';
-import '../../../core/backend/runtime_models.dart';
 import '../../../core/motion/app_motion.dart';
 import '../../../core/state/runtime_controller.dart';
+import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/staggered_reveal.dart';
 import '../../../core/ui/components/terminal_illustration.dart';
 import '../../../core/ui/components/terminal_surface.dart';
@@ -14,11 +14,13 @@ import '../../../core/ui/design_tokens.dart';
 class LogsScreen extends ConsumerStatefulWidget {
   const LogsScreen({
     required this.onOpenSettings,
+    required this.bottomInset,
     required this.visitToken,
     super.key,
   });
 
   final VoidCallback onOpenSettings;
+  final double bottomInset;
   final int visitToken;
 
   @override
@@ -44,14 +46,16 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= AppBreakpoints.compact;
         final mobile = AppBreakpoints.isMobile(constraints.maxWidth);
-        final terminalHeight = constraints.maxHeight > 760
+        final terminalHeight = mobile
+            ? 360.0
+            : constraints.maxHeight > 760
             ? constraints.maxHeight - (wide ? 300 : 340)
-            : mobile
-            ? 440.0
             : 540.0;
 
         return SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: constraints.maxHeight),
             child: Column(
@@ -100,6 +104,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                     ),
                   ),
                 ),
+                SizedBox(height: widget.bottomInset),
               ],
             ),
           ),

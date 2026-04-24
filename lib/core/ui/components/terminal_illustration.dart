@@ -42,10 +42,12 @@ class TerminalIllustration extends StatelessWidget {
                 secondary: theme.colorScheme.secondary,
                 tertiary: theme.colorScheme.tertiary,
                 surface: extras.terminalSurface,
+                toolbar: extras.terminalToolbar,
                 lineSurface: extras.terminalLineSurface,
                 stroke: extras.terminalStroke,
                 text: extras.terminalText,
                 muted: extras.terminalMutedText,
+                terminalAccent: extras.terminalAccent,
                 success: extras.success,
                 warning: extras.warning,
               ),
@@ -64,10 +66,12 @@ class _TerminalIllustrationPainter extends CustomPainter {
     required this.secondary,
     required this.tertiary,
     required this.surface,
+    required this.toolbar,
     required this.lineSurface,
     required this.stroke,
     required this.text,
     required this.muted,
+    required this.terminalAccent,
     required this.success,
     required this.warning,
   });
@@ -77,10 +81,12 @@ class _TerminalIllustrationPainter extends CustomPainter {
   final Color secondary;
   final Color tertiary;
   final Color surface;
+  final Color toolbar;
   final Color lineSurface;
   final Color stroke;
   final Color text;
   final Color muted;
+  final Color terminalAccent;
   final Color success;
   final Color warning;
 
@@ -93,9 +99,9 @@ class _TerminalIllustrationPainter extends CustomPainter {
     final headerPaint = Paint()
       ..shader = LinearGradient(
         colors: [
-          accent.withValues(alpha: 0.22),
-          secondary.withValues(alpha: 0.14),
-          surface.withValues(alpha: 0.28),
+          toolbar,
+          accent.withValues(alpha: 0.16),
+          toolbar.withValues(alpha: 0.88),
         ],
       ).createShader(Rect.fromLTWH(0, 0, size.width, headerHeight));
     canvas.drawRRect(
@@ -130,7 +136,7 @@ class _TerminalIllustrationPainter extends CustomPainter {
       canvas,
       '> status',
       Offset(size.width * 0.08, headerHeight + size.height * 0.12),
-      mono.copyWith(color: accent),
+      mono.copyWith(color: terminalAccent),
     );
 
     final rows = <_IllustrationRow>[
@@ -213,10 +219,12 @@ class _TerminalIllustrationPainter extends CustomPainter {
         oldDelegate.secondary != secondary ||
         oldDelegate.tertiary != tertiary ||
         oldDelegate.surface != surface ||
+        oldDelegate.toolbar != toolbar ||
         oldDelegate.lineSurface != lineSurface ||
         oldDelegate.stroke != stroke ||
         oldDelegate.text != text ||
         oldDelegate.muted != muted ||
+        oldDelegate.terminalAccent != terminalAccent ||
         oldDelegate.success != success ||
         oldDelegate.warning != warning;
   }

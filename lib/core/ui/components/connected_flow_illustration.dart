@@ -3,8 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_theme.dart';
-import '../../../core/backend/runtime_models.dart';
 import '../../motion/app_motion.dart';
+import '../../state/runtime_view_models.dart';
 
 class ConnectedFlowIllustration extends StatelessWidget {
   const ConnectedFlowIllustration({

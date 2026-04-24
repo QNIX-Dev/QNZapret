@@ -25,7 +25,7 @@ class FloatingNavigationBar extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppRadii.pill),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: extras.navigationSurface,
@@ -33,33 +33,42 @@ class FloatingNavigationBar extends StatelessWidget {
             border: Border.all(color: extras.navigationStroke),
             boxShadow: [
               BoxShadow(
-                color: theme.colorScheme.shadow.withValues(alpha: 0.18),
-                blurRadius: 30,
+                color: theme.colorScheme.shadow.withValues(alpha: 0.16),
+                blurRadius: 34,
                 offset: const Offset(0, 16),
+              ),
+              BoxShadow(
+                color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                blurRadius: 22,
+                offset: const Offset(0, 6),
               ),
             ],
           ),
           child: Padding(
             padding: const EdgeInsets.all(6),
             child: SizedBox(
-              width: 158,
+              width: 150,
               height: 50,
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  const pillWidth = 58.0;
-                  final pillLeft = destination == AppDestination.home
-                      ? 5.0
-                      : constraints.maxWidth - pillWidth - 5;
+                  const pillWidth = 54.0;
+                  const pillHeight = 40.0;
+                  final itemWidth =
+                      constraints.maxWidth / AppDestination.values.length;
+                  final selectedIndex = destination.index;
+                  final pillLeft =
+                      itemWidth * selectedIndex + (itemWidth - pillWidth) / 2;
+                  final pillTop = (constraints.maxHeight - pillHeight) / 2;
 
                   return Stack(
                     children: [
                       AnimatedPositioned(
-                        duration: AppMotionDurations.slow,
-                        curve: AppMotionCurves.emphasized,
+                        duration: AppMotionDurations.page,
+                        curve: AppMotionCurves.spring,
                         left: pillLeft,
-                        top: 4,
+                        top: pillTop,
                         width: pillWidth,
-                        height: constraints.maxHeight - 8,
+                        height: pillHeight,
                         child: DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: extras.navigationFocusGradient,
@@ -67,7 +76,7 @@ class FloatingNavigationBar extends StatelessWidget {
                             boxShadow: [
                               BoxShadow(
                                 color: theme.colorScheme.primary.withValues(
-                                  alpha: 0.22,
+                                  alpha: 0.24,
                                 ),
                                 blurRadius: 20,
                                 offset: const Offset(0, 8),
@@ -85,9 +94,6 @@ class FloatingNavigationBar extends StatelessWidget {
                               selected: destination == AppDestination.home,
                               activeColor: extras.navigationFocusForeground,
                               inactiveColor: extras.navigationIcon,
-                              splashColor: theme.colorScheme.primary.withValues(
-                                alpha: 0.12,
-                              ),
                               onTap: () => onSelect(AppDestination.home),
                             ),
                           ),
@@ -98,9 +104,6 @@ class FloatingNavigationBar extends StatelessWidget {
                               selected: destination == AppDestination.logs,
                               activeColor: extras.navigationFocusForeground,
                               inactiveColor: extras.navigationIcon,
-                              splashColor: theme.colorScheme.primary.withValues(
-                                alpha: 0.12,
-                              ),
                               onTap: () => onSelect(AppDestination.logs),
                             ),
                           ),
@@ -118,14 +121,13 @@ class FloatingNavigationBar extends StatelessWidget {
   }
 }
 
-class _NavItem extends StatelessWidget {
+class _NavItem extends StatefulWidget {
   const _NavItem({
     required this.icon,
     required this.semanticLabel,
     required this.selected,
     required this.activeColor,
     required this.inactiveColor,
-    required this.splashColor,
     required this.onTap,
   });
 
@@ -134,38 +136,49 @@ class _NavItem extends StatelessWidget {
   final bool selected;
   final Color activeColor;
   final Color inactiveColor;
-  final Color splashColor;
   final VoidCallback onTap;
 
   @override
+  State<_NavItem> createState() => _NavItemState();
+}
+
+class _NavItemState extends State<_NavItem> {
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
+    final selected = widget.selected;
+    final scale = selected ? (_pressed ? 0.98 : 1.08) : (_pressed ? 0.9 : 0.94);
+    final opacity = selected ? 1.0 : (_pressed ? 0.58 : 0.76);
+
     return Semantics(
       button: true,
-      label: semanticLabel,
+      label: widget.semanticLabel,
       selected: selected,
-      child: Material(
-        color: Colors.transparent,
-        child: InkResponse(
-          onTap: onTap,
-          radius: 30,
-          splashColor: splashColor,
-          highlightShape: BoxShape.circle,
+      child: Tooltip(
+        message: widget.semanticLabel,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTap: widget.onTap,
           child: Center(
             child: AnimatedSlide(
               duration: AppMotionDurations.standard,
               curve: AppMotionCurves.decelerate,
-              offset: Offset(0, selected ? -0.04 : 0.02),
+              offset: Offset(0, selected ? -0.05 : 0.02),
               child: AnimatedScale(
                 duration: AppMotionDurations.standard,
-                curve: AppMotionCurves.decelerate,
-                scale: selected ? 1.06 : 0.9,
+                curve: AppMotionCurves.spring,
+                scale: scale,
                 child: AnimatedOpacity(
                   duration: AppMotionDurations.fast,
-                  opacity: selected ? 1 : 0.84,
+                  opacity: opacity,
                   child: Icon(
-                    icon,
+                    widget.icon,
                     size: 24,
-                    color: selected ? activeColor : inactiveColor,
+                    color: selected ? widget.activeColor : widget.inactiveColor,
                   ),
                 ),
               ),

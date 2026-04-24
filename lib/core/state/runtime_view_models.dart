@@ -35,19 +35,21 @@ extension ServiceRuntimeStatusX on ServiceRuntimeStatus {
     ServiceRuntimeStatus.stopping => 'Остановка',
     ServiceRuntimeStatus.failed => 'Сбой',
   };
-
-  String get description => switch (this) {
-    ServiceRuntimeStatus.idle => 'Сервис готов к запуску.',
-    ServiceRuntimeStatus.starting => 'Сервис запускается.',
-    ServiceRuntimeStatus.running => 'Сервис работает.',
-    ServiceRuntimeStatus.stopping => 'Сервис останавливается.',
-    ServiceRuntimeStatus.failed => 'Во время запуска возникла ошибка.',
-  };
 }
 
 enum RuntimeCommandType { start, stop }
 
 enum RuntimeLogLevel { system, info, success, warning, error }
+
+enum RuntimeLaunchScenario { fullSuccess, nfqwsOnly, telegramOnly }
+
+extension RuntimeLaunchScenarioX on RuntimeLaunchScenario {
+  String get title => switch (this) {
+    RuntimeLaunchScenario.fullSuccess => 'Оба сервиса',
+    RuntimeLaunchScenario.nfqwsOnly => 'Только nfqws',
+    RuntimeLaunchScenario.telegramOnly => 'Только Telegram',
+  };
+}
 
 @immutable
 class RuntimeFailure {
@@ -110,23 +112,6 @@ class ServiceRuntimeState {
       failure: clearFailure ? null : failure ?? this.failure,
     );
   }
-}
-
-@immutable
-class ServiceLaunchResult {
-  const ServiceLaunchResult({
-    required this.serviceType,
-    required this.status,
-    required this.timestamp,
-    this.failure,
-  });
-
-  final BypassServiceType serviceType;
-  final ServiceRuntimeStatus status;
-  final DateTime timestamp;
-  final RuntimeFailure? failure;
-
-  bool get success => status == ServiceRuntimeStatus.running;
 }
 
 @immutable
@@ -245,17 +230,4 @@ class RuntimeLogEntry {
   final RuntimeLogLevel level;
   final String message;
   final BypassServiceType? serviceType;
-}
-
-@immutable
-class RuntimeBridgeCapabilities {
-  const RuntimeBridgeCapabilities({
-    required this.supportedServices,
-    this.supportsLogStream = true,
-    this.supportsSimulationControls = false,
-  });
-
-  final Set<BypassServiceType> supportedServices;
-  final bool supportsLogStream;
-  final bool supportsSimulationControls;
 }

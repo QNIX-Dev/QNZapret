@@ -39,7 +39,7 @@ final class AppBreakpoints {
 
   static double pagePadding(double width) {
     if (width < mobile) {
-      return 18;
+      return 14;
     }
     if (width < compact) {
       return 20;

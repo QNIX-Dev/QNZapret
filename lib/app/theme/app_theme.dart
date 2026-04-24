@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-enum AppPaletteId { monokai, gruvbox, catppuccin, nord, emberwave, roseOfDune }
+enum AppPaletteId { monokai, gruvbox, catppuccin, nord, everforest, roseOfDune }
 
 @immutable
 class AppPaletteSpec {
@@ -71,6 +71,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
     required this.terminalBadgeSurface,
     required this.terminalText,
     required this.terminalMutedText,
+    required this.terminalAccent,
     required this.success,
     required this.warning,
     required this.danger,
@@ -94,6 +95,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
   final Color terminalBadgeSurface;
   final Color terminalText;
   final Color terminalMutedText;
+  final Color terminalAccent;
   final Color success;
   final Color warning;
   final Color danger;
@@ -118,6 +120,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
     Color? terminalBadgeSurface,
     Color? terminalText,
     Color? terminalMutedText,
+    Color? terminalAccent,
     Color? success,
     Color? warning,
     Color? danger,
@@ -143,6 +146,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
       terminalBadgeSurface: terminalBadgeSurface ?? this.terminalBadgeSurface,
       terminalText: terminalText ?? this.terminalText,
       terminalMutedText: terminalMutedText ?? this.terminalMutedText,
+      terminalAccent: terminalAccent ?? this.terminalAccent,
       success: success ?? this.success,
       warning: warning ?? this.warning,
       danger: danger ?? this.danger,
@@ -212,6 +216,8 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
       terminalMutedText:
           Color.lerp(terminalMutedText, other.terminalMutedText, t) ??
           terminalMutedText,
+      terminalAccent:
+          Color.lerp(terminalAccent, other.terminalAccent, t) ?? terminalAccent,
       success: Color.lerp(success, other.success, t) ?? success,
       warning: Color.lerp(warning, other.warning, t) ?? warning,
       danger: Color.lerp(danger, other.danger, t) ?? danger,
@@ -232,51 +238,55 @@ final class AppTheme {
     const AppPaletteSpec(
       id: AppPaletteId.monokai,
       label: 'Monokai',
-      caption: 'Тёплый контраст и яркие акценты.',
-      lightSurface: Color(0xFFF7E5CF),
+      caption: 'Pink, yellow и green в духе классики.',
+      lightSurface: Color(0xFFF8F0DF),
       darkSurface: Color(0xFF272822),
-      lightAccent: Color(0xFFBE4E72),
+      lightAccent: Color(0xFFC0275B),
       darkAccent: Color(0xFFF92672),
-      lightSecondary: Color(0xFF759C2D),
+      lightSecondary: Color(0xFF6F8F13),
       darkSecondary: Color(0xFFA6E22E),
-      lightTertiary: Color(0xFFD8841C),
-      darkTertiary: Color(0xFFFD971F),
+      lightTertiary: Color(0xFFC98A11),
+      darkTertiary: Color(0xFFE6DB74),
       lightPreview: [
-        Color(0xFFF7E5CF),
-        Color(0xFFE9C89B),
-        Color(0xFFBE4E72),
-        Color(0xFF759C2D),
+        Color(0xFFF8F0DF),
+        Color(0xFFE9D7B8),
+        Color(0xFFC0275B),
+        Color(0xFF6F8F13),
+        Color(0xFFC98A11),
       ],
       darkPreview: [
         Color(0xFF272822),
         Color(0xFF3A3B34),
         Color(0xFFF92672),
         Color(0xFFA6E22E),
+        Color(0xFFE6DB74),
       ],
     ),
     const AppPaletteSpec(
       id: AppPaletteId.gruvbox,
       label: 'Gruvbox',
-      caption: 'Тёплая ретро-палитра без лишней резкости.',
+      caption: 'Warm bg, orange, green, aqua и red.',
       lightSurface: Color(0xFFFBF1C7),
       darkSurface: Color(0xFF282828),
-      lightAccent: Color(0xFFD79921),
+      lightAccent: Color(0xFFD65D0E),
       darkAccent: Color(0xFFFABD2F),
-      lightSecondary: Color(0xFF689D6A),
+      lightSecondary: Color(0xFF98971A),
       darkSecondary: Color(0xFF8EC07C),
       lightTertiary: Color(0xFF458588),
       darkTertiary: Color(0xFF83A598),
       lightPreview: [
         Color(0xFFFBF1C7),
         Color(0xFFF2E5BC),
-        Color(0xFFD79921),
-        Color(0xFF689D6A),
+        Color(0xFFD65D0E),
+        Color(0xFF98971A),
+        Color(0xFF458588),
       ],
       darkPreview: [
         Color(0xFF282828),
         Color(0xFF3C3836),
         Color(0xFFFABD2F),
         Color(0xFF8EC07C),
+        Color(0xFF83A598),
       ],
     ),
     const AppPaletteSpec(
@@ -312,14 +322,15 @@ final class AppTheme {
       darkSurface: Color(0xFF2E3440),
       lightAccent: Color(0xFF5E81AC),
       darkAccent: Color(0xFF88C0D0),
-      lightSecondary: Color(0xFF81A1C1),
+      lightSecondary: Color(0xFF88C0D0),
       darkSecondary: Color(0xFF81A1C1),
-      lightTertiary: Color(0xFFB48EAD),
+      lightTertiary: Color(0xFF81A1C1),
       darkTertiary: Color(0xFFB48EAD),
       lightPreview: [
         Color(0xFFECEFF4),
         Color(0xFFD8DEE9),
         Color(0xFF5E81AC),
+        Color(0xFF88C0D0),
         Color(0xFF81A1C1),
       ],
       darkPreview: [
@@ -330,53 +341,57 @@ final class AppTheme {
       ],
     ),
     const AppPaletteSpec(
-      id: AppPaletteId.emberwave,
-      label: 'Emberwave',
-      caption: 'Тёплый жар, коралл и мягкая глубина.',
-      lightSurface: Color(0xFFF6E6D7),
-      darkSurface: Color(0xFF241816),
-      lightAccent: Color(0xFFD96B3B),
-      darkAccent: Color(0xFFF4A261),
-      lightSecondary: Color(0xFFB24E57),
-      darkSecondary: Color(0xFFF28482),
-      lightTertiary: Color(0xFFD2A24B),
-      darkTertiary: Color(0xFFF6BD60),
+      id: AppPaletteId.everforest,
+      label: 'Everforest',
+      caption: 'Natural green/yellow с мягким контрастом.',
+      lightSurface: Color(0xFFFDF6E3),
+      darkSurface: Color(0xFF2D353B),
+      lightAccent: Color(0xFF8DA101),
+      darkAccent: Color(0xFFA7C080),
+      lightSecondary: Color(0xFFDFA000),
+      darkSecondary: Color(0xFFDBBC7F),
+      lightTertiary: Color(0xFF35A77C),
+      darkTertiary: Color(0xFF83C092),
       lightPreview: [
-        Color(0xFFF6E6D7),
-        Color(0xFFF0C7AB),
-        Color(0xFFD96B3B),
-        Color(0xFFB24E57),
+        Color(0xFFFDF6E3),
+        Color(0xFFF2EFDF),
+        Color(0xFF8DA101),
+        Color(0xFFDFA000),
+        Color(0xFF35A77C),
       ],
       darkPreview: [
-        Color(0xFF241816),
-        Color(0xFF372220),
-        Color(0xFFF4A261),
-        Color(0xFFF28482),
+        Color(0xFF2D353B),
+        Color(0xFF3A464C),
+        Color(0xFFA7C080),
+        Color(0xFFDBBC7F),
+        Color(0xFF83C092),
       ],
     ),
     const AppPaletteSpec(
       id: AppPaletteId.roseOfDune,
       label: 'Rose of Dune',
-      caption: 'Песочный свет и мягкое вечернее тепло.',
-      lightSurface: Color(0xFFF7EAD8),
-      darkSurface: Color(0xFF2A1D18),
-      lightAccent: Color(0xFFC79A54),
-      darkAccent: Color(0xFFE0B36D),
-      lightSecondary: Color(0xFFB26A5C),
-      darkSecondary: Color(0xFFD78F7D),
-      lightTertiary: Color(0xFF8F6A45),
-      darkTertiary: Color(0xFFC8A47B),
+      caption: 'Песочно-золотая схема с розовым теплом.',
+      lightSurface: Color(0xFFFFEED6),
+      darkSurface: Color(0xFF2B2119),
+      lightAccent: Color(0xFFC88B2C),
+      darkAccent: Color(0xFFE8B965),
+      lightSecondary: Color(0xFFC45F68),
+      darkSecondary: Color(0xFFE08F87),
+      lightTertiary: Color(0xFF9E7B38),
+      darkTertiary: Color(0xFFCFA76A),
       lightPreview: [
-        Color(0xFFF7EAD8),
-        Color(0xFFECC99A),
-        Color(0xFFC79A54),
-        Color(0xFFB26A5C),
+        Color(0xFFFFEED6),
+        Color(0xFFF2C982),
+        Color(0xFFC88B2C),
+        Color(0xFFC45F68),
+        Color(0xFF9E7B38),
       ],
       darkPreview: [
-        Color(0xFF2A1D18),
-        Color(0xFF3B2A24),
-        Color(0xFFE0B36D),
-        Color(0xFFD78F7D),
+        Color(0xFF2B2119),
+        Color(0xFF463424),
+        Color(0xFFE8B965),
+        Color(0xFFE08F87),
+        Color(0xFFCFA76A),
       ],
     ),
   ];
@@ -395,9 +410,6 @@ final class AppTheme {
     final accent = palette.accentFor(brightness);
     final secondary = palette.secondaryFor(brightness);
     final tertiary = palette.tertiaryFor(brightness);
-    final companionSurface = palette.surfaceFor(
-      isDark ? Brightness.light : Brightness.dark,
-    );
     final onSurface = isDark
         ? const Color(0xFFF6F1E8)
         : const Color(0xFF1C1714);
@@ -456,11 +468,20 @@ final class AppTheme {
 
     final navigationFocusColor = _mix(accent, secondary, 0.45);
     final terminalSurface = isDark
-        ? _blend(Colors.black, surface, 0.22)
-        : _blend(companionSurface, surface, 0.92);
+        ? _blend(Colors.black, surface, 0.18)
+        : _blend(accent, surface, 0.055);
     final terminalText = _foregroundFor(
       terminalSurface,
     ).withValues(alpha: 0.94);
+    final terminalToolbar = isDark
+        ? _blend(accent, terminalSurface, 0.12)
+        : _blend(Colors.white, _blend(accent, terminalSurface, 0.10), 0.48);
+    final terminalLineSurface = isDark
+        ? _blend(Colors.white, terminalSurface, 0.05)
+        : _blend(Colors.white, terminalSurface, 0.56);
+    final terminalBadgeSurface = isDark
+        ? _blend(Colors.white, terminalSurface, 0.09)
+        : _blend(accent, terminalSurface, 0.09);
 
     final extras = AppThemeExtras(
       backgroundGradient: LinearGradient(
@@ -481,8 +502,16 @@ final class AppTheme {
       glowColor: accent.withValues(alpha: isDark ? 0.36 : 0.22),
       glassSurface: _blend(Colors.white, surface, isDark ? 0.06 : 0.76),
       glassStroke: _blend(accent, surface, isDark ? 0.22 : 0.1),
-      navigationSurface: _blend(Colors.white, surface, isDark ? 0.05 : 0.5),
-      navigationStroke: _blend(accent, surface, isDark ? 0.24 : 0.12),
+      navigationSurface: _blend(
+        Colors.white,
+        surface,
+        isDark ? 0.08 : 0.42,
+      ).withValues(alpha: isDark ? 0.62 : 0.7),
+      navigationStroke: _blend(
+        accent,
+        surface,
+        isDark ? 0.28 : 0.16,
+      ).withValues(alpha: 0.78),
       navigationFocusGradient: LinearGradient(
         begin: Alignment.centerLeft,
         end: Alignment.centerRight,
@@ -491,20 +520,13 @@ final class AppTheme {
       navigationFocusForeground: _foregroundFor(navigationFocusColor),
       navigationIcon: onSurface.withValues(alpha: isDark ? 0.72 : 0.68),
       terminalSurface: terminalSurface,
-      terminalToolbar: _blend(accent, terminalSurface, isDark ? 0.12 : 0.08),
+      terminalToolbar: terminalToolbar,
       terminalStroke: _blend(accent, terminalSurface, isDark ? 0.28 : 0.2),
-      terminalLineSurface: _blend(
-        Colors.white,
-        terminalSurface,
-        isDark ? 0.05 : 0.06,
-      ),
-      terminalBadgeSurface: _blend(
-        Colors.white,
-        terminalSurface,
-        isDark ? 0.09 : 0.08,
-      ),
+      terminalLineSurface: terminalLineSurface,
+      terminalBadgeSurface: terminalBadgeSurface,
       terminalText: terminalText,
       terminalMutedText: terminalText.withValues(alpha: 0.58),
+      terminalAccent: accent,
       success: success,
       warning: warning,
       danger: danger,

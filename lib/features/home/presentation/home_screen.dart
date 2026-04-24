@@ -3,8 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/app_metadata.dart';
-import '../../../core/backend/runtime_models.dart';
 import '../../../core/state/runtime_controller.dart';
+import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/connected_flow_illustration.dart';
 import '../../../core/ui/components/premium_cta_button.dart';
 import '../../../core/ui/components/status_chip.dart';
@@ -12,9 +12,14 @@ import '../../../core/ui/design_tokens.dart';
 import '../../../app/theme/app_theme.dart';
 
 class HomeScreen extends ConsumerWidget {
-  const HomeScreen({required this.onOpenSettings, super.key});
+  const HomeScreen({
+    required this.onOpenSettings,
+    required this.bottomInset,
+    super.key,
+  });
 
   final VoidCallback onOpenSettings;
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -27,98 +32,107 @@ class HomeScreen extends ConsumerWidget {
         final wide = constraints.maxWidth >= AppBreakpoints.compact;
         final mobile = AppBreakpoints.isMobile(constraints.maxWidth);
         final horizontalPadding = mobile
-            ? AppSpacing.md
+            ? AppSpacing.sm
             : AppBreakpoints.isExpanded(constraints.maxWidth)
             ? AppSpacing.xxl
             : AppSpacing.xl;
         final verticalPadding = mobile ? AppSpacing.lg : AppSpacing.xxl;
         final heroRadius = mobile ? AppRadii.lg : AppRadii.xl;
+        final heroMinHeight = constraints.maxHeight > bottomInset
+            ? constraints.maxHeight - bottomInset
+            : 0.0;
 
         return SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: constraints.maxHeight),
-            child: Padding(
-              padding: EdgeInsets.only(
-                bottom: wide ? AppSpacing.lg : AppSpacing.xl,
-              ),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: context.appThemeExtras.glassSurface,
-                  borderRadius: BorderRadius.circular(heroRadius),
-                  border: Border.all(color: context.appThemeExtras.glassStroke),
-                  boxShadow: mobile ? const [] : AppElevations.card,
-                ),
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    horizontalPadding,
-                    verticalPadding,
-                    horizontalPadding,
-                    verticalPadding,
+          physics: const BouncingScrollPhysics(
+            parent: AlwaysScrollableScrollPhysics(),
+          ),
+          child: Column(
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(minHeight: heroMinHeight),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: context.appThemeExtras.glassSurface,
+                    borderRadius: BorderRadius.circular(heroRadius),
+                    border: Border.all(
+                      color: context.appThemeExtras.glassStroke,
+                    ),
+                    boxShadow: mobile ? const [] : AppElevations.card,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _HeroTopBar(onOpenSettings: onOpenSettings),
-                      SizedBox(height: mobile ? AppSpacing.lg : AppSpacing.xl),
-                      if (wide)
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(minHeight: 430),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Expanded(
-                                flex: 6,
-                                child: _HeroDetails(
-                                  runtimeView: runtimeView,
-                                  centered: false,
-                                  onPrimaryAction: () async {
-                                    HapticFeedback.lightImpact();
-                                    if (runtimeState.isFullyRunning) {
-                                      await controller.stopAllServices();
-                                    } else {
-                                      await controller.startAllServices();
-                                    }
-                                  },
-                                ),
-                              ),
-                              const SizedBox(width: AppSpacing.xxl),
-                              Expanded(
-                                flex: 5,
-                                child: _HeroIllustration(
-                                  runtimeState: runtimeState,
-                                  framed: true,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      else ...[
-                        _HeroIllustration(
-                          runtimeState: runtimeState,
-                          framed: false,
-                        ),
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPadding,
+                      verticalPadding,
+                      horizontalPadding,
+                      verticalPadding,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _HeroTopBar(onOpenSettings: onOpenSettings),
                         SizedBox(
                           height: mobile ? AppSpacing.lg : AppSpacing.xl,
                         ),
-                        _HeroDetails(
-                          runtimeView: runtimeView,
-                          centered: true,
-                          onPrimaryAction: () async {
-                            HapticFeedback.lightImpact();
-                            if (runtimeState.isFullyRunning) {
-                              await controller.stopAllServices();
-                            } else {
-                              await controller.startAllServices();
-                            }
-                          },
-                        ),
+                        if (wide)
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 430),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  flex: 6,
+                                  child: _HeroDetails(
+                                    runtimeView: runtimeView,
+                                    centered: false,
+                                    onPrimaryAction: () async {
+                                      HapticFeedback.lightImpact();
+                                      if (runtimeState.isFullyRunning) {
+                                        await controller.stopAllServices();
+                                      } else {
+                                        await controller.startAllServices();
+                                      }
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: AppSpacing.xxl),
+                                Expanded(
+                                  flex: 5,
+                                  child: _HeroIllustration(
+                                    runtimeState: runtimeState,
+                                    framed: true,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else ...[
+                          _HeroIllustration(
+                            runtimeState: runtimeState,
+                            framed: false,
+                          ),
+                          SizedBox(
+                            height: mobile ? AppSpacing.lg : AppSpacing.xl,
+                          ),
+                          _HeroDetails(
+                            runtimeView: runtimeView,
+                            centered: true,
+                            onPrimaryAction: () async {
+                              HapticFeedback.lightImpact();
+                              if (runtimeState.isFullyRunning) {
+                                await controller.stopAllServices();
+                              } else {
+                                await controller.startAllServices();
+                              }
+                            },
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
-            ),
+              SizedBox(height: bottomInset),
+            ],
           ),
         );
       },
@@ -189,21 +203,27 @@ class _HeroDetails extends StatelessWidget {
           ? CrossAxisAlignment.center
           : CrossAxisAlignment.start,
       children: [
-        ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: centered ? 520 : 480),
-          child: RuntimeStatusChip(
-            serviceState: runtimeState.stateFor(BypassServiceType.nfqws),
-            expanded: centered,
+        Align(
+          alignment: centered ? Alignment.center : Alignment.centerLeft,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: centered ? 520 : 480),
+            child: RuntimeStatusChip(
+              serviceState: runtimeState.stateFor(BypassServiceType.nfqws),
+              expanded: false,
+            ),
           ),
         ),
         const SizedBox(height: AppSpacing.sm),
-        ConstrainedBox(
-          constraints: BoxConstraints(maxWidth: centered ? 520 : 480),
-          child: RuntimeStatusChip(
-            serviceState: runtimeState.stateFor(
-              BypassServiceType.telegramProxy,
+        Align(
+          alignment: centered ? Alignment.center : Alignment.centerLeft,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: centered ? 520 : 480),
+            child: RuntimeStatusChip(
+              serviceState: runtimeState.stateFor(
+                BypassServiceType.telegramProxy,
+              ),
+              expanded: false,
             ),
-            expanded: centered,
           ),
         ),
         SizedBox(height: centered ? AppSpacing.lg : AppSpacing.xl),

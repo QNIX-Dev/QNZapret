@@ -10,6 +10,7 @@ final class AppMotionDurations {
 final class AppMotionCurves {
   static const Curve standard = Cubic(0.2, 0.0, 0.0, 1.0);
   static const Curve emphasized = Cubic(0.2, 0.0, 0.0, 1.0);
+  static const Curve spring = Cubic(0.18, 1.22, 0.24, 1.0);
   static const Curve decelerate = Cubic(0.05, 0.7, 0.1, 1.0);
   static const Curve accelerate = Cubic(0.3, 0.0, 0.8, 0.15);
 }

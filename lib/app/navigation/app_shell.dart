@@ -56,18 +56,21 @@ class _AppShellState extends ConsumerState<AppShell> {
       body: AppBackdrop(
         child: LayoutBuilder(
           builder: (context, constraints) {
+            final safePadding = MediaQuery.paddingOf(context);
             final pagePadding = AppBreakpoints.pagePadding(
               constraints.maxWidth,
             );
+            final navBottom = safePadding.bottom + 14;
+            final navClearance = safePadding.bottom + 102;
 
             return Stack(
               children: [
-                SafeArea(
-                  minimum: EdgeInsets.fromLTRB(
-                    pagePadding,
-                    pagePadding,
-                    pagePadding,
-                    104,
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    safePadding.left + pagePadding,
+                    safePadding.top + pagePadding,
+                    safePadding.right + pagePadding,
+                    0,
                   ),
                   child: Align(
                     alignment: Alignment.topCenter,
@@ -85,6 +88,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                               index: AppDestination.home.index,
                               child: HomeScreen(
                                 onOpenSettings: () => _openSettings(context),
+                                bottomInset: navClearance,
                               ),
                             ),
                             _SharedAxisPage(
@@ -92,6 +96,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                               index: AppDestination.logs.index,
                               child: LogsScreen(
                                 onOpenSettings: () => _openSettings(context),
+                                bottomInset: navClearance,
                                 visitToken:
                                     _visitTokens[AppDestination.logs] ?? 0,
                               ),
@@ -105,19 +110,16 @@ class _AppShellState extends ConsumerState<AppShell> {
                 Positioned(
                   left: 0,
                   right: 0,
-                  bottom: 18,
-                  child: SafeArea(
-                    top: false,
-                    child: Center(
-                      child: FloatingNavigationBar(
-                        destination: settings.destination,
-                        onSelect: (destination) {
-                          HapticFeedback.selectionClick();
-                          ref
-                              .read(appSettingsControllerProvider.notifier)
-                              .setDestination(destination);
-                        },
-                      ),
+                  bottom: navBottom,
+                  child: Center(
+                    child: FloatingNavigationBar(
+                      destination: settings.destination,
+                      onSelect: (destination) {
+                        HapticFeedback.selectionClick();
+                        ref
+                            .read(appSettingsControllerProvider.notifier)
+                            .setDestination(destination);
+                      },
                     ),
                   ),
                 ),
@@ -167,7 +169,7 @@ class _AppShellState extends ConsumerState<AppShell> {
             builder: (context) => const SettingsScreen(
               presentation: SettingsScreenPresentation.page,
             ),
-            fullscreenDialog: true,
+            fullscreenDialog: false,
           )
         : _settingsDialogRoute();
 

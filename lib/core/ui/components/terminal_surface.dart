@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../app/theme/app_theme.dart';
-import '../../backend/runtime_models.dart';
 import '../../motion/app_motion.dart';
+import '../../state/runtime_view_models.dart';
 import '../design_tokens.dart';
 
 class TerminalSurface extends StatelessWidget {
@@ -38,69 +38,90 @@ class TerminalSurface extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md,
-              AppSpacing.md,
-              AppSpacing.md,
-              AppSpacing.sm,
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: extras.terminalToolbar,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(AppRadii.lg),
+              ),
             ),
-            child: Row(
-              children: [
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: extras.terminalBadgeSurface,
-                    borderRadius: BorderRadius.circular(AppRadii.pill),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    child: Text(
-                      '${logs.length} строк',
-                      style: theme.textTheme.labelLarge?.copyWith(
-                        color: extras.terminalText,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.md,
+                AppSpacing.md,
+                AppSpacing.sm,
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 380;
+
+                  return Row(
+                    children: [
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: extras.terminalBadgeSurface,
+                          borderRadius: BorderRadius.circular(AppRadii.pill),
+                          border: Border.all(
+                            color: extras.terminalAccent.withValues(
+                              alpha: 0.14,
+                            ),
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          child: Text(
+                            '${logs.length} строк',
+                            style: theme.textTheme.labelLarge?.copyWith(
+                              color: extras.terminalText,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                AnimatedSwitcher(
-                  duration: AppMotionDurations.fast,
-                  child: Text(
-                    autoScrollEnabled ? 'Автопрокрутка' : 'Пауза',
-                    key: ValueKey(autoScrollEnabled),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: autoScrollEnabled
-                          ? extras.success
-                          : extras.warning,
-                    ),
-                  ),
-                ),
-                const Spacer(),
-                _TerminalActionButton(
-                  tooltip: autoScrollEnabled
-                      ? 'Пауза автопрокрутки'
-                      : 'Возобновить автопрокрутку',
-                  icon: autoScrollEnabled
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                  onTap: onToggleAutoScroll,
-                ),
-                const SizedBox(width: 8),
-                _TerminalActionButton(
-                  tooltip: 'Копировать',
-                  icon: Icons.copy_all_rounded,
-                  onTap: onCopy,
-                ),
-                const SizedBox(width: 8),
-                _TerminalActionButton(
-                  tooltip: 'Очистить',
-                  icon: Icons.cleaning_services_rounded,
-                  onTap: onClear,
-                ),
-              ],
+                      if (!compact) ...[
+                        const SizedBox(width: AppSpacing.sm),
+                        AnimatedSwitcher(
+                          duration: AppMotionDurations.fast,
+                          child: Text(
+                            autoScrollEnabled ? 'Автопрокрутка' : 'Пауза',
+                            key: ValueKey(autoScrollEnabled),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: autoScrollEnabled
+                                  ? extras.success
+                                  : extras.warning,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const Spacer(),
+                      _TerminalActionButton(
+                        tooltip: autoScrollEnabled
+                            ? 'Пауза автопрокрутки'
+                            : 'Возобновить автопрокрутку',
+                        icon: autoScrollEnabled
+                            ? Icons.pause_rounded
+                            : Icons.play_arrow_rounded,
+                        onTap: onToggleAutoScroll,
+                      ),
+                      const SizedBox(width: 8),
+                      _TerminalActionButton(
+                        tooltip: 'Копировать',
+                        icon: Icons.copy_all_rounded,
+                        onTap: onCopy,
+                      ),
+                      const SizedBox(width: 8),
+                      _TerminalActionButton(
+                        tooltip: 'Очистить',
+                        icon: Icons.cleaning_services_rounded,
+                        onTap: onClear,
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
           Divider(
@@ -255,16 +276,55 @@ class _TerminalActionButton extends StatelessWidget {
 
     return Tooltip(
       message: tooltip,
-      child: Material(
-        color: extras.terminalBadgeSurface,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
+      child: _TerminalTapFeedback(
+        onTap: onTap,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: extras.terminalBadgeSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: extras.terminalStroke.withValues(alpha: 0.58),
+            ),
+          ),
           child: Padding(
             padding: const EdgeInsets.all(10),
             child: Icon(icon, size: 18, color: extras.terminalText),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TerminalTapFeedback extends StatefulWidget {
+  const _TerminalTapFeedback({required this.child, required this.onTap});
+
+  final Widget child;
+  final VoidCallback onTap;
+
+  @override
+  State<_TerminalTapFeedback> createState() => _TerminalTapFeedbackState();
+}
+
+class _TerminalTapFeedbackState extends State<_TerminalTapFeedback> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapCancel: () => setState(() => _pressed = false),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        duration: AppMotionDurations.fast,
+        curve: AppMotionCurves.decelerate,
+        scale: _pressed ? 0.94 : 1,
+        child: AnimatedOpacity(
+          duration: AppMotionDurations.fast,
+          opacity: _pressed ? 0.74 : 1,
+          child: widget.child,
         ),
       ),
     );

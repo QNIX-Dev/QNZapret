@@ -6,10 +6,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme/app_theme.dart';
 import '../../../core/app_metadata.dart';
-import '../../../core/backend/runtime_bridge.dart';
+import '../../../core/motion/app_motion.dart';
 import '../../../core/state/app_settings_controller.dart';
 import '../../../core/state/package_info_provider.dart';
 import '../../../core/state/runtime_controller.dart';
+import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/app_backdrop.dart';
 import '../../../core/ui/components/palette_preview_card.dart';
 import '../../../core/ui/components/settings_section_card.dart';
@@ -111,7 +112,7 @@ class _SettingsBody extends StatelessWidget {
     final mobilePage = _isPage && AppBreakpoints.useSettingsPage(size.width);
 
     return SafeArea(
-      minimum: EdgeInsets.all(mobilePage ? 18 : AppSpacing.md),
+      minimum: EdgeInsets.all(mobilePage ? 14 : AppSpacing.md),
       child: mobilePage
           ? _SettingsPanel(
               isPage: true,
@@ -281,11 +282,14 @@ class _SettingsPanel extends StatelessWidget {
                     fullPage ? 0 : AppSpacing.lg,
                     AppSpacing.lg,
                   ),
-                  physics: const BouncingScrollPhysics(),
+                  physics: const BouncingScrollPhysics(
+                    parent: AlwaysScrollableScrollPhysics(),
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       StaggeredReveal(
+                        immediate: true,
                         child: _BrandHero(
                           packageInfo: packageInfo,
                           compact: mobile,
@@ -298,6 +302,7 @@ class _SettingsPanel extends StatelessWidget {
                           children: [
                             Expanded(
                               child: StaggeredReveal(
+                                immediate: true,
                                 delay: const Duration(milliseconds: 80),
                                 child: SettingsSectionCard(
                                   title: 'Режим темы',
@@ -340,6 +345,7 @@ class _SettingsPanel extends StatelessWidget {
                         )
                       else ...[
                         StaggeredReveal(
+                          immediate: true,
                           delay: const Duration(milliseconds: 80),
                           child: SettingsSectionCard(
                             title: 'Режим темы',
@@ -377,11 +383,11 @@ class _SettingsPanel extends StatelessWidget {
                       ],
                       const SizedBox(height: AppSpacing.lg),
                       StaggeredReveal(
+                        immediate: true,
                         delay: const Duration(milliseconds: 180),
                         child: SettingsSectionCard(
                           title: 'Цветовая схема',
-                          description:
-                              'Показываем превью в текущем режиме яркости.',
+                          description: 'Выберите оформление приложения.',
                           child: GridView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
@@ -585,29 +591,135 @@ class _ThemeModeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: AppSpacing.sm,
-      runSpacing: AppSpacing.sm,
-      children: [
-        _ModeChip(
-          label: 'Системная',
-          icon: Icons.brightness_auto_rounded,
-          selected: selected == ThemeMode.system,
-          onTap: () => onSelected(ThemeMode.system),
+    final extras = context.appThemeExtras;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Theme.of(
+          context,
+        ).colorScheme.surfaceContainerHigh.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(AppRadii.pill),
+        border: Border.all(color: extras.glassStroke),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Row(
+          children: [
+            _ThemeSegment(
+              label: 'Система',
+              tooltip: 'Следовать системе',
+              icon: Icons.brightness_auto_rounded,
+              selected: selected == ThemeMode.system,
+              onTap: () => onSelected(ThemeMode.system),
+            ),
+            _ThemeSegment(
+              label: 'Светлая',
+              tooltip: 'Светлая тема',
+              icon: Icons.wb_sunny_rounded,
+              selected: selected == ThemeMode.light,
+              onTap: () => onSelected(ThemeMode.light),
+            ),
+            _ThemeSegment(
+              label: 'Тёмная',
+              tooltip: 'Тёмная тема',
+              icon: Icons.dark_mode_rounded,
+              selected: selected == ThemeMode.dark,
+              onTap: () => onSelected(ThemeMode.dark),
+            ),
+          ],
         ),
-        _ModeChip(
-          label: 'Светлая',
-          icon: Icons.wb_sunny_rounded,
-          selected: selected == ThemeMode.light,
-          onTap: () => onSelected(ThemeMode.light),
+      ),
+    );
+  }
+}
+
+class _ThemeSegment extends StatefulWidget {
+  const _ThemeSegment({
+    required this.label,
+    required this.tooltip,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final String tooltip;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_ThemeSegment> createState() => _ThemeSegmentState();
+}
+
+class _ThemeSegmentState extends State<_ThemeSegment> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final selected = widget.selected;
+    final foreground = selected
+        ? theme.colorScheme.onPrimaryContainer
+        : theme.colorScheme.onSurface.withValues(alpha: 0.72);
+
+    return Expanded(
+      child: Tooltip(
+        message: widget.tooltip,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => setState(() => _pressed = true),
+          onTapCancel: () => setState(() => _pressed = false),
+          onTapUp: (_) => setState(() => _pressed = false),
+          onTap: widget.onTap,
+          child: AnimatedScale(
+            duration: AppMotionDurations.fast,
+            curve: AppMotionCurves.decelerate,
+            scale: _pressed ? 0.97 : 1,
+            child: AnimatedContainer(
+              duration: AppMotionDurations.standard,
+              curve: AppMotionCurves.standard,
+              height: 42,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected
+                    ? theme.colorScheme.primaryContainer
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+                boxShadow: selected
+                    ? [
+                        BoxShadow(
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.16,
+                          ),
+                          blurRadius: 14,
+                          offset: const Offset(0, 6),
+                        ),
+                      ]
+                    : const [],
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(widget.icon, size: 17, color: foreground),
+                    const SizedBox(width: 6),
+                    Text(
+                      widget.label,
+                      maxLines: 1,
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: foreground,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
-        _ModeChip(
-          label: 'Тёмная',
-          icon: Icons.dark_mode_rounded,
-          selected: selected == ThemeMode.dark,
-          onTap: () => onSelected(ThemeMode.dark),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -623,8 +735,7 @@ class _SimulationScenarioSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selectedScenario =
-        runtimeView.selectedScenario ?? RuntimeLaunchScenario.fullSuccess;
+    final selectedScenario = runtimeView.selectedScenario;
 
     return Wrap(
       spacing: AppSpacing.sm,
