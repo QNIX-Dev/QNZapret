@@ -24,6 +24,7 @@
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
 
@@ -225,12 +226,14 @@ Userspace forwarding foundation сейчас умеет:
 - отвечать на TCP SYN из TUN через synthetic SYN/ACK, вести client/server sequence numbers, ACK, FIN и RST
 - открывать protected `Socket`, чтобы исходящий IPv4/IPv6 TCP stream не возвращался обратно в VPN
 - прокидывать TCP payload между TUN flow и protected socket, синтезируя TCP response packets обратно в TUN output
+- вести TCP client-side state через `TcpRelayState`: принимать in-order payload, игнорировать full duplicate retransmits, форвардить только новый tail при overlapping retransmit, ACK/drop out-of-order payload без продвижения окна и корректно проходить unsigned sequence wrap
 - вызывать `StrategyRuntimeEngine.evaluate()` на первом TCP payload chunk
 - применять TCP `split` как best-effort stream write split; TCP `fake` в no-root socket mode намеренно не отправляется в реальный socket
+- чистить idle UDP/TCP sessions и ограничивать накопленный TCP payload до завершения protected socket connect
 
 Ограничения текущего foundation:
 
-- TCP relay/state machine является foundation-реализацией без полноценного retransmit, congestion control, backpressure и долгого idle cleanup
+- TCP relay/state machine является foundation-реализацией без out-of-order buffering, полноценного retransmit/reassembly, congestion control, write backpressure и расширенной диагностики
 - TUN default-route не включается по умолчанию, потому что `ProxyLaunchConfig.defaultAndroidStrategy.establishTunnel=false`; при явном `establishTunnel=true` он включается только если TCP/UDP capabilities готовы
 - IPv6 extension headers пока не разворачиваются, foundation обрабатывает прямой IPv6 UDP/TCP `nextHeader`
 - QUIC host detection пока не связывает QUIC Initial с доменом без внешней DNS/SNI correlation, поэтому hostlist-based `udpFake` обычно не сработает сам по себе
