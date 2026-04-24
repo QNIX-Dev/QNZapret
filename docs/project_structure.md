@@ -53,9 +53,14 @@ android/
         StrategyProfile.kt
         StrategyRuntimeEngine.kt
         StrategyRuntimePlan.kt
+        TcpRelayState.kt
         TunPacketForwarder.kt
         TunTransport.kt
         VpnRuntimeConfig.kt
+    src/test/
+      kotlin/dev/qnzapret/
+        IpPacketCodecTest.kt
+        TcpRelayStateTest.kt
 
 linux/
 windows/
@@ -172,8 +177,10 @@ test/
   Принимает flow probe и возвращает direct/desync decision по strategy profile, hostlists и payload assets.
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
   Парсит IPv4/IPv6 UDP packets и TCP segments из TUN, собирает IPv4/IPv6 UDP/TCP response packets для записи обратно в TUN.
+- `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
+  Изолированная TCP client-side state machine для sequence accounting, duplicate/overlap retransmit handling, out-of-order ACK/drop и FIN progression.
 - `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
-  Userspace forwarder core: читает TUN packets, умеет IPv4/IPv6 UDP relay через Android protected `DatagramSocket`, TCP relay/state machine через protected `Socket`, вызывает strategy engine перед отправкой UDP datagram и первого TCP payload chunk.
+  Userspace forwarder core: читает TUN packets, умеет IPv4/IPv6 UDP relay через Android protected `DatagramSocket`, TCP relay/state machine через protected `Socket`, вызывает strategy engine перед отправкой UDP datagram и первого TCP payload chunk, чистит idle UDP/TCP sessions и ограничивает pending TCP payload до socket connect.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
   Компилятор профиля в компактный runtime plan.
   План сохраняет `unmatchedTrafficPolicy`, чтобы future forwarder знал, что потоки вне hostlists нужно вести direct forwarding без desync-действий.
@@ -216,11 +223,14 @@ Channel:
 - `test/core/backend/proxy_runtime_test.dart`
 - `test/core/backend/proxy_runtime_controller_test.dart`
 - `test/widget_test.dart`
+- `android/app/src/test/kotlin/dev/qnzapret/TcpRelayStateTest.kt`
+- `android/app/src/test/kotlin/dev/qnzapret/IpPacketCodecTest.kt`
 
 При значимых изменениях runtime-контракта нужно запускать:
 
 - `flutter analyze`
 - `flutter test`
+- `cd android; .\gradlew.bat :app:testDebugUnitTest`
 
 ## Границы ответственности
 
