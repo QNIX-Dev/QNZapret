@@ -2,6 +2,12 @@ enum ProxyPlatform { android, linux, windows }
 
 enum ProxyRuntimeState { idle, starting, running, stopping, failed }
 
+enum StrategyProtocol { http, tls, quic }
+
+enum StrategyActionKind { split, fake, udpFake }
+
+enum UnmatchedTrafficPolicy { direct }
+
 class ProxyPrepareResult {
   const ProxyPrepareResult({required this.granted, required this.message});
 
@@ -23,13 +29,27 @@ class ProxyLaunchConfig {
     required this.poolSize,
     required this.cloudflareEnabled,
     required this.secret,
+    this.strategyProfile = StrategyProfile.defaultLightweight,
+    this.establishTunnel = false,
+    this.tunnelMtu = 8500,
   });
+
+  static const defaultAndroidStrategy = ProxyLaunchConfig(
+    localHost: '127.0.0.1',
+    localPort: 1080,
+    poolSize: 0,
+    cloudflareEnabled: false,
+    secret: '',
+  );
 
   final String localHost;
   final int localPort;
   final int poolSize;
   final bool cloudflareEnabled;
   final String secret;
+  final StrategyProfile strategyProfile;
+  final bool establishTunnel;
+  final int tunnelMtu;
 
   Map<String, Object?> toMap() {
     return {
@@ -38,7 +58,236 @@ class ProxyLaunchConfig {
       'poolSize': poolSize,
       'cloudflareEnabled': cloudflareEnabled,
       'secret': secret,
+      'strategyProfile': strategyProfile.toMap(),
+      'establishTunnel': establishTunnel,
+      'tunnelMtu': tunnelMtu,
     };
+  }
+
+  ProxyLaunchConfig copyWith({
+    String? localHost,
+    int? localPort,
+    int? poolSize,
+    bool? cloudflareEnabled,
+    String? secret,
+    StrategyProfile? strategyProfile,
+    bool? establishTunnel,
+    int? tunnelMtu,
+  }) {
+    return ProxyLaunchConfig(
+      localHost: localHost ?? this.localHost,
+      localPort: localPort ?? this.localPort,
+      poolSize: poolSize ?? this.poolSize,
+      cloudflareEnabled: cloudflareEnabled ?? this.cloudflareEnabled,
+      secret: secret ?? this.secret,
+      strategyProfile: strategyProfile ?? this.strategyProfile,
+      establishTunnel: establishTunnel ?? this.establishTunnel,
+      tunnelMtu: tunnelMtu ?? this.tunnelMtu,
+    );
+  }
+}
+
+class StrategyProfile {
+  const StrategyProfile({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.unmatchedTrafficPolicy,
+    required this.blobs,
+    required this.rules,
+  });
+
+  static const defaultLightweight = StrategyProfile(
+    id: 'default-lightweight',
+    name: 'Default lightweight',
+    description:
+        'No-root VPN/proxy subset inspired by the base zapret profile.',
+    unmatchedTrafficPolicy: UnmatchedTrafficPolicy.direct,
+    blobs: {
+      'tls_google': 'qnzapret/payloads/tls_clienthello_www_google_com.bin',
+      'quic_google': 'qnzapret/payloads/quic_initial_www_google_com.bin',
+    },
+    rules: [
+      StrategyRule(
+        id: 'http-hostlist-fake-split',
+        name: 'HTTP hostlist fake + split',
+        tcpPorts: [80],
+        udpPorts: [],
+        protocols: [StrategyProtocol.http],
+        hostlists: [
+          'qnzapret/lists/list-general.txt',
+          'qnzapret/lists/list-user.txt',
+          'qnzapret/lists/list-google.txt',
+        ],
+        actions: [
+          StrategyAction(kind: StrategyActionKind.fake, repeats: 1),
+          StrategyAction(
+            kind: StrategyActionKind.split,
+            position: 1,
+            repeats: 1,
+          ),
+        ],
+      ),
+      StrategyRule(
+        id: 'tls-hostlist-split',
+        name: 'TLS ClientHello split',
+        tcpPorts: [443],
+        udpPorts: [],
+        protocols: [StrategyProtocol.tls],
+        hostlists: [
+          'qnzapret/lists/list-general.txt',
+          'qnzapret/lists/list-user.txt',
+          'qnzapret/lists/list-google.txt',
+        ],
+        actions: [
+          StrategyAction(
+            kind: StrategyActionKind.fake,
+            blobKey: 'tls_google',
+            repeats: 1,
+          ),
+          StrategyAction(
+            kind: StrategyActionKind.split,
+            position: 1,
+            repeats: 1,
+          ),
+        ],
+      ),
+      StrategyRule(
+        id: 'quic-hostlist-fake',
+        name: 'QUIC Initial fake',
+        tcpPorts: [],
+        udpPorts: [443],
+        protocols: [StrategyProtocol.quic],
+        hostlists: [
+          'qnzapret/lists/list-google.txt',
+          'qnzapret/lists/list-user.txt',
+        ],
+        actions: [
+          StrategyAction(
+            kind: StrategyActionKind.udpFake,
+            blobKey: 'quic_google',
+            repeats: 1,
+          ),
+        ],
+      ),
+    ],
+  );
+
+  final String id;
+  final String name;
+  final String description;
+  final UnmatchedTrafficPolicy unmatchedTrafficPolicy;
+  final Map<String, String> blobs;
+  final List<StrategyRule> rules;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'description': description,
+      'unmatchedTrafficPolicy': unmatchedTrafficPolicy.name,
+      'blobs': blobs,
+      'rules': rules.map((rule) => rule.toMap()).toList(),
+    };
+  }
+
+  factory StrategyProfile.fromMap(Map<Object?, Object?> map) {
+    final blobs = _parseStringMap(map['blobs']);
+    final rules = _parseMapList(
+      map['rules'],
+    ).map(StrategyRule.fromMap).toList(growable: false);
+
+    return StrategyProfile(
+      id: map['id'] as String? ?? defaultLightweight.id,
+      name: map['name'] as String? ?? defaultLightweight.name,
+      description:
+          map['description'] as String? ?? defaultLightweight.description,
+      unmatchedTrafficPolicy: _parseUnmatchedTrafficPolicy(
+        map['unmatchedTrafficPolicy'] as String?,
+      ),
+      blobs: blobs.isEmpty ? defaultLightweight.blobs : blobs,
+      rules: rules.isEmpty ? defaultLightweight.rules : rules,
+    );
+  }
+}
+
+class StrategyRule {
+  const StrategyRule({
+    required this.id,
+    required this.name,
+    required this.tcpPorts,
+    required this.udpPorts,
+    required this.protocols,
+    required this.hostlists,
+    required this.actions,
+  });
+
+  final String id;
+  final String name;
+  final List<int> tcpPorts;
+  final List<int> udpPorts;
+  final List<StrategyProtocol> protocols;
+  final List<String> hostlists;
+  final List<StrategyAction> actions;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'tcpPorts': tcpPorts,
+      'udpPorts': udpPorts,
+      'protocols': protocols.map((protocol) => protocol.name).toList(),
+      'hostlists': hostlists,
+      'actions': actions.map((action) => action.toMap()).toList(),
+    };
+  }
+
+  factory StrategyRule.fromMap(Map<Object?, Object?> map) {
+    return StrategyRule(
+      id: map['id'] as String? ?? '',
+      name: map['name'] as String? ?? '',
+      tcpPorts: _parseIntList(map['tcpPorts']),
+      udpPorts: _parseIntList(map['udpPorts']),
+      protocols: _parseStringList(
+        map['protocols'],
+      ).map(_parseStrategyProtocol).toList(growable: false),
+      hostlists: _parseStringList(map['hostlists']),
+      actions: _parseMapList(
+        map['actions'],
+      ).map(StrategyAction.fromMap).toList(growable: false),
+    );
+  }
+}
+
+class StrategyAction {
+  const StrategyAction({
+    required this.kind,
+    this.position,
+    this.repeats = 1,
+    this.blobKey,
+  });
+
+  final StrategyActionKind kind;
+  final int? position;
+  final int repeats;
+  final String? blobKey;
+
+  Map<String, Object?> toMap() {
+    return {
+      'kind': kind.name,
+      if (position != null) 'position': position,
+      'repeats': repeats,
+      if (blobKey != null) 'blobKey': blobKey,
+    };
+  }
+
+  factory StrategyAction.fromMap(Map<Object?, Object?> map) {
+    return StrategyAction(
+      kind: _parseStrategyActionKind(map['kind'] as String?),
+      position: (map['position'] as num?)?.toInt(),
+      repeats: (map['repeats'] as num?)?.toInt() ?? 1,
+      blobKey: map['blobKey'] as String?,
+    );
   }
 }
 
@@ -59,6 +308,17 @@ class ProxyRuntimeSnapshot {
   final bool vpnPermissionGranted;
   final bool serviceActive;
 
+  factory ProxyRuntimeSnapshot.initial(ProxyPlatform platform) {
+    return ProxyRuntimeSnapshot(
+      platform: platform,
+      state: ProxyRuntimeState.idle,
+      message: 'Runtime snapshot has not been loaded yet.',
+      backendConnected: false,
+      vpnPermissionGranted: false,
+      serviceActive: false,
+    );
+  }
+
   factory ProxyRuntimeSnapshot.fromMap(Map<Object?, Object?> map) {
     return ProxyRuntimeSnapshot(
       platform: _parsePlatform(map['platform'] as String?),
@@ -69,9 +329,29 @@ class ProxyRuntimeSnapshot {
       serviceActive: map['serviceActive'] as bool? ?? false,
     );
   }
+
+  ProxyRuntimeSnapshot copyWith({
+    ProxyPlatform? platform,
+    ProxyRuntimeState? state,
+    String? message,
+    bool? backendConnected,
+    bool? vpnPermissionGranted,
+    bool? serviceActive,
+  }) {
+    return ProxyRuntimeSnapshot(
+      platform: platform ?? this.platform,
+      state: state ?? this.state,
+      message: message ?? this.message,
+      backendConnected: backendConnected ?? this.backendConnected,
+      vpnPermissionGranted: vpnPermissionGranted ?? this.vpnPermissionGranted,
+      serviceActive: serviceActive ?? this.serviceActive,
+    );
+  }
 }
 
 abstract interface class ProxyRuntime {
+  ProxyPlatform get platform;
+
   Future<ProxyPrepareResult> prepare();
 
   Future<ProxyRuntimeSnapshot> getSnapshot();
@@ -84,6 +364,7 @@ abstract interface class ProxyRuntime {
 final class StubProxyRuntime implements ProxyRuntime {
   const StubProxyRuntime(this.platform);
 
+  @override
   final ProxyPlatform platform;
 
   @override
@@ -99,7 +380,7 @@ final class StubProxyRuntime implements ProxyRuntime {
     return ProxyRuntimeSnapshot(
       platform: platform,
       state: ProxyRuntimeState.idle,
-      message: 'Bridge for native Go backend is not connected yet.',
+      message: 'Bridge for native strategy runtime is not connected yet.',
       backendConnected: false,
       vpnPermissionGranted: false,
       serviceActive: false,
@@ -125,4 +406,65 @@ ProxyRuntimeState _parseRuntimeState(String? rawValue) {
     (value) => value.name == rawValue,
     orElse: () => ProxyRuntimeState.failed,
   );
+}
+
+StrategyProtocol _parseStrategyProtocol(String rawValue) {
+  return StrategyProtocol.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => StrategyProtocol.http,
+  );
+}
+
+StrategyActionKind _parseStrategyActionKind(String? rawValue) {
+  return StrategyActionKind.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => StrategyActionKind.split,
+  );
+}
+
+UnmatchedTrafficPolicy _parseUnmatchedTrafficPolicy(String? rawValue) {
+  return UnmatchedTrafficPolicy.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => StrategyProfile.defaultLightweight.unmatchedTrafficPolicy,
+  );
+}
+
+Map<String, String> _parseStringMap(Object? rawValue) {
+  if (rawValue is! Map) {
+    return const {};
+  }
+
+  return rawValue.map(
+    (key, value) => MapEntry(key.toString(), value.toString()),
+  );
+}
+
+List<String> _parseStringList(Object? rawValue) {
+  if (rawValue is! Iterable) {
+    return const [];
+  }
+
+  return rawValue.map((value) => value.toString()).toList(growable: false);
+}
+
+List<int> _parseIntList(Object? rawValue) {
+  if (rawValue is! Iterable) {
+    return const [];
+  }
+
+  return rawValue
+      .whereType<num>()
+      .map((value) => value.toInt())
+      .toList(growable: false);
+}
+
+List<Map<Object?, Object?>> _parseMapList(Object? rawValue) {
+  if (rawValue is! Iterable) {
+    return const [];
+  }
+
+  return rawValue
+      .whereType<Map>()
+      .map((value) => value.cast<Object?, Object?>())
+      .toList(growable: false);
 }

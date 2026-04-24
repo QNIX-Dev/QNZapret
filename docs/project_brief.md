@@ -8,8 +8,8 @@
 
 ## Что такое QNZapret
 
-`QNZapret` - кроссплатформенный Flutter shell для будущего клиента с нативным runtime/backend-контуром.
-Proxy-часть планируется строить вокруг утилиты `tgwsproxy`, и именно эта утилита написана на Go.
+`QNZapret` - кроссплатформенный Flutter shell для клиента с нативным runtime/backend-контуром.
+Android-направление строится как no-root VPN/proxy runtime: приложение получает трафик через `VpnService`, направляет его в локальный strategy proxy и применяет собственные DPI-bypass стратегии без встраивания чужого кода.
 
 Поддерживаемые цели в репозитории сейчас:
 
@@ -21,11 +21,11 @@ Proxy-часть планируется строить вокруг утилит
 
 - frontend: Flutter + Dart
 - backend/runtime target: платформенный runtime-контур, подключаемый через adapters
-- proxy utility: `tgwsproxy` на Go
+- Android runtime target: `VpnService` + local strategy proxy + userspace TUN transport
 
 ## Текущая стадия
 
-Проект находится на стадии брендированного frontend shell с начатой Android backend-интеграцией.
+Проект находится на стадии брендированного frontend shell с начатой Android runtime-интеграцией.
 
 Что уже есть:
 
@@ -34,18 +34,26 @@ Proxy-часть планируется строить вокруг утилит
 - продуктовая dark-mode-first тема в `lib/app/theme/app_theme.dart`
 - стартовый экран в `lib/features/home/presentation/home_screen.dart`
 - общий Dart-контракт runtime в `lib/core/backend/proxy_runtime.dart`
+- frontend-friendly `ProxyRuntimeController` и barrel export `lib/core/backend/backend.dart`
+- composition helper `createDefaultProxyRuntime()`, который подключает Android adapter на Android и stub-адаптеры на desktop
+- serializable strategy profile model для HTTP/TLS/QUIC правил
+- `UnmatchedTrafficPolicy.direct` для трафика вне hostlists: списки включают desync-обработку, а не ограничивают общий доступ
 - `StubProxyRuntime` для состояния, где нативный runtime еще не подключен
 - `AndroidProxyRuntime` как Dart-адаптер поверх `MethodChannel`
 - Android bridge в `ProxyRuntimeBridge.kt`
-- Android VPN foreground service base в `QnzapretVpnService.kt`
+- Android VPN foreground service в `QnzapretVpnService.kt`
+- Android strategy runtime skeleton в `QnzapretAndroidRuntime.kt`
+- Android local proxy/TUN lifecycle заготовки в `LocalStrategyProxy.kt` и `TunTransport.kt`
+- Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
+- проверка наличия strategy assets на старте skeleton через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
 - базовые тесты сериализации и парсинга runtime-моделей
 
 Что еще не подключено:
 
-- реальная proxy-утилита `tgwsproxy`
-- реальное создание VPN tunnel
-- production lifecycle нативных процессов
+- userspace forwarder между TUN fd и локальным strategy proxy
+- реальная socket/proxy implementation для HTTP/TLS/QUIC потоков
+- production чтение payload assets и hostlists внутри local strategy proxy
 - поток логов из backend
 - desktop bridge implementations для Linux и Windows
 - полноценные runtime-контролы, пресеты и профили стратегий
@@ -54,7 +62,14 @@ Proxy-часть планируется строить вокруг утилит
 
 Целевая схема:
 
-`UI -> shared Dart runtime contract -> platform adapter -> native runtime`
+`UI -> shared Dart runtime contract -> platform adapter -> native strategy runtime`
+
+Android target path:
+
+`Android VpnService -> TUN transport -> local strategy proxy -> protected sockets`
+
+Hostlists в strategy profile трактуются как списки включения DPI-bypass действий.
+Если поток не совпал со списками, production local strategy proxy должен пропускать его напрямую через protected socket без fake/split действий.
 
 Обязательные принципы:
 
@@ -67,8 +82,11 @@ Proxy-часть планируется строить вокруг утилит
 
 Актуальный контракт описан в:
 
+- `lib/core/backend/backend.dart`
 - `lib/core/backend/proxy_runtime.dart`
 - `lib/core/backend/android_proxy_runtime.dart`
+- `lib/core/backend/proxy_runtime_controller.dart`
+- `lib/core/backend/proxy_runtime_factory.dart`
 - `docs/runtime_bridge_contract.md`
 
 Текущий публичный Dart API строится вокруг `ProxyRuntime`:
@@ -79,7 +97,8 @@ Proxy-часть планируется строить вокруг утилит
 - `stop()`
 
 Состояние runtime возвращается как `ProxyRuntimeSnapshot`.
-Android сейчас использует `MethodChannel` с именем `dev.quriee.qnzapret/proxy_runtime`.
+Для UI-команд и отображения состояния рекомендуется использовать `ProxyRuntimeController`: он предоставляет `initialize`, `prepare`, `start`, `stop`, `refresh`, `isBusy`, `canStart`, `canStop`, `needsPrepare` и `lastFailure`.
+Android сейчас использует `MethodChannel` с именем `dev.qnzapret/proxy_runtime`.
 
 ## Что важно для совместной работы frontend/backend
 
@@ -102,14 +121,13 @@ UI и продуктовые экраны могут развиваться от
 - состояние текущего runtime bridge
 - ближайшие backend-интеграционные этапы
 
-Сейчас экран использует `StubProxyRuntime`, поэтому он не управляет настоящим Android service.
-Реальный Android adapter уже есть в коде, но composition/UI еще не переведены на полноценный runtime lifecycle.
+Composition root уже передает в экран `createDefaultProxyRuntime()`: на Android это реальный `AndroidProxyRuntime`, на desktop пока stub-адаптеры.
 
 ## Ближайшая цель следующей стадии
 
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
-1. подключить `AndroidProxyRuntime` в composition root вместо stub-состояния, когда UI будет готов к реальному lifecycle;
-2. связать Android service base с `tgwsproxy` и выбранным bridge/process-механизмом;
-3. уточнить snapshot, ошибки и будущий log stream;
+1. реализовать userspace forwarder между TUN fd и локальным strategy proxy;
+2. наполнить local strategy proxy HTTP/TLS/QUIC detectors, hostlists, split/fake actions и payload assets;
+3. добавить production log stream поверх текущего controller/snapshot слоя;
 4. после Android закрепить equivalent contract для Linux и Windows.

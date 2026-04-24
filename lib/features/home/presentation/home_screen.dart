@@ -1,15 +1,17 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/theme/app_theme.dart';
-import '../../../core/backend/proxy_runtime.dart';
+import '../../../core/backend/backend.dart';
 
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key, required this.runtime});
+
+  final ProxyRuntime runtime;
 
   static const _platforms = [
     _PlatformCardData(
       label: 'Android',
-      caption: 'foreground service, local proxy, Telegram handoff',
+      caption: 'foreground service, local proxy, VPN runtime',
       icon: Icons.android_rounded,
     ),
     _PlatformCardData(
@@ -33,7 +35,7 @@ class HomeScreen extends StatelessWidget {
     _FeaturePoint(
       title: 'Backend-ready hooks',
       description:
-          'Dedicated integration layer reserved for nfqws, strategy execution, and Telegram-oriented proxy control.',
+          'Dedicated integration layer for strategy profiles, VPN lifecycle, and native runtime diagnostics.',
     ),
     _FeaturePoint(
       title: 'Commercial-first UX',
@@ -43,21 +45,49 @@ class HomeScreen extends StatelessWidget {
   ];
 
   static const _nextMilestones = [
-    'connect Android bridge to the existing Go/JNA runtime',
+    'connect Android bridge to the local strategy runtime',
     'define desktop bridge contracts for Linux and Windows',
     'add connection presets, strategy profiles, and live logs',
   ];
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  late ProxyRuntimeController _runtimeController;
+
+  @override
+  void initState() {
+    super.initState();
+    _runtimeController = ProxyRuntimeController(runtime: widget.runtime)
+      ..initialize();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.runtime != widget.runtime) {
+      _runtimeController.dispose();
+      _runtimeController = ProxyRuntimeController(runtime: widget.runtime)
+        ..initialize();
+    }
+  }
+
+  @override
+  void dispose() {
+    _runtimeController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const runtime = StubProxyRuntime(ProxyPlatform.android);
 
-    return FutureBuilder<ProxyRuntimeSnapshot>(
-      future: runtime.getSnapshot(),
-      builder: (context, snapshot) {
-        final runtimeState = snapshot.data;
-
+    return AnimatedBuilder(
+      animation: _runtimeController,
+      builder: (context, _) {
+        final runtimeState = _runtimeController.snapshot;
         return Scaffold(
           body: DecoratedBox(
             decoration: const BoxDecoration(
@@ -106,8 +136,8 @@ class HomeScreen extends StatelessWidget {
                                 ),
                                 _StatusPill(
                                   label:
-                                      runtimeState?.message ??
-                                      'Checking backend bridge...',
+                                      _runtimeController.lastFailure?.message ??
+                                      runtimeState.message,
                                   tone: Colors.white,
                                 ),
                               ],
@@ -155,21 +185,20 @@ class HomeScreen extends StatelessWidget {
                             Wrap(
                               spacing: 16,
                               runSpacing: 16,
-                              children: _platforms
+                              children: HomeScreen._platforms
                                   .map((item) => _PlatformCard(data: item))
                                   .toList(),
                             ),
                             const SizedBox(height: 28),
                             const _SectionTitle(
                               eyebrow: 'Foundation',
-                              title:
-                                  'Initial architecture for the future agent-dev',
+                              title: 'Initial architecture for backend wiring',
                             ),
                             const SizedBox(height: 12),
                             Wrap(
                               spacing: 16,
                               runSpacing: 16,
-                              children: _productPoints
+                              children: HomeScreen._productPoints
                                   .map((item) => _FeatureCard(point: item))
                                   .toList(),
                             ),
@@ -179,7 +208,9 @@ class HomeScreen extends StatelessWidget {
                               title: 'Closest implementation slice',
                             ),
                             const SizedBox(height: 12),
-                            const _MilestonePanel(items: _nextMilestones),
+                            const _MilestonePanel(
+                              items: HomeScreen._nextMilestones,
+                            ),
                           ],
                         ),
                       ),
@@ -222,7 +253,7 @@ class _HeroPanel extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           Text(
-            'Кроссплатформенный frontend shell для будущего клиента с native Go runtime и сильной продуктовой подачей.',
+            'Кроссплатформенный frontend shell для будущего клиента с native strategy runtime и сильной продуктовой подачей.',
             style: theme.textTheme.titleLarge?.copyWith(
               color: Colors.white.withAlpha(219),
               height: 1.35,
@@ -231,7 +262,7 @@ class _HeroPanel extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            'На этом этапе мы подняли общий Flutter-каркас в корне проекта, подготовили архитектуру под backend bridge и оставили чистое место для интеграции существующих наработок из .sources без смешивания исходников.',
+            'На этом этапе мы подняли общий Flutter-каркас, подключили Android runtime bridge к общей Dart-поверхности и подготовили место для дальнейшей реализации userspace forwarding.',
             style: theme.textTheme.bodyLarge?.copyWith(
               color: Colors.white.withAlpha(179),
               height: 1.5,
@@ -244,7 +275,7 @@ class _HeroPanel extends StatelessWidget {
             children: [
               _MetricTile(value: '3', label: 'target platforms'),
               _MetricTile(value: '1', label: 'shared Flutter shell'),
-              _MetricTile(value: '0', label: 'backend bridges wired yet'),
+              _MetricTile(value: '1', label: 'Android bridge skeleton'),
             ],
           ),
         ],
@@ -256,18 +287,17 @@ class _HeroPanel extends StatelessWidget {
 class _RuntimePanel extends StatelessWidget {
   const _RuntimePanel({required this.runtimeState});
 
-  final ProxyRuntimeSnapshot? runtimeState;
+  final ProxyRuntimeSnapshot runtimeState;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final stateLabel = switch (runtimeState?.state) {
+    final stateLabel = switch (runtimeState.state) {
       ProxyRuntimeState.idle => 'Idle',
       ProxyRuntimeState.starting => 'Starting',
       ProxyRuntimeState.running => 'Running',
       ProxyRuntimeState.stopping => 'Stopping',
       ProxyRuntimeState.failed => 'Failed',
-      null => 'Loading',
     };
 
     return Container(
@@ -287,16 +317,11 @@ class _RuntimePanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          _InfoRow(
-            label: 'Platform',
-            value: runtimeState?.platform.name ?? '-',
-          ),
+          _InfoRow(label: 'Platform', value: runtimeState.platform.name),
           _InfoRow(label: 'State', value: stateLabel),
           _InfoRow(
             label: 'Bridge',
-            value: runtimeState?.backendConnected == true
-                ? 'connected'
-                : 'reserved',
+            value: runtimeState.backendConnected ? 'connected' : 'reserved',
           ),
           const SizedBox(height: 18),
           Text(

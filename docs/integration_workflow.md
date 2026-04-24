@@ -8,7 +8,7 @@
 
 - сократить число расхождений между UI и runtime-реализацией
 - сделать handoff между frontend и backend предсказуемым
-- не ломать экранную логику при подключении реальной proxy-части на `tgwsproxy`
+- не ломать экранную логику при подключении реального Android strategy runtime
 - сохранять Android/Linux/Windows adapters за общей Dart-поверхностью
 
 ## Главный принцип
@@ -47,11 +47,20 @@
 ### Совместная зона
 
 - `docs/runtime_bridge_contract.md`
+- `lib/core/backend/backend.dart`
 - `lib/core/backend/proxy_runtime.dart`
 - `lib/core/backend/android_proxy_runtime.dart`
-- `android/app/src/main/kotlin/dev/quriee/qnzapret/ProxyRuntimeBridge.kt`
-- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnService.kt`
-- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnRuntimeStore.kt`
+- `lib/core/backend/proxy_runtime_controller.dart`
+- `lib/core/backend/proxy_runtime_factory.dart`
+- `android/app/src/main/kotlin/dev/qnzapret/ProxyRuntimeBridge.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnService.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/QnzapretAndroidRuntime.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetVerifier.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyProfile.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
 
 Именно эти артефакты должны рассматриваться как shared contract surface для текущей Android-интеграции.
 
@@ -65,7 +74,8 @@
 - какие поля snapshot UI реально использует
 - какие состояния backend может гарантировать
 - какие native errors считаются публичными
-- как отличать service base от fully connected `tgwsproxy`
+- как отличать foreground service от fully connected userspace forwarder
+- какие части strategy profile являются стабильным no-root subset
 
 Результат:
 
@@ -86,13 +96,15 @@ Backend реализует platform adapter так, чтобы наружу он
 
 ### Этап 3. Подключение в composition/UI
 
-Сейчас стартовый экран работает через `StubProxyRuntime`.
-Когда реальный Android lifecycle будет готов для продукта, подключение должно пройти через общий Dart API.
+Стартовый экран получает `ProxyRuntime` из composition root и работает с ним через `ProxyRuntimeController`.
+Фронтендеру не нужно вызывать `MethodChannel` или Android classes напрямую.
 
 Ожидаемый принцип:
 
-- сейчас: `StubProxyRuntime(ProxyPlatform.android)`
-- позже: `AndroidProxyRuntime()`
+- `main.dart` создает runtime через `createDefaultProxyRuntime()`
+- `QnzapretApp` принимает `ProxyRuntime`
+- UI создает или получает `ProxyRuntimeController`
+- кнопки и индикаторы используют `initialize`, `prepare`, `start`, `stop`, `refresh`, `isBusy`, `needsPrepare`, `canStart`, `canStop`, `lastFailure`
 
 Если контракт не сломан, экранный слой не должен знать Kotlin/Android details.
 
@@ -105,8 +117,11 @@ Backend реализует platform adapter так, чтобы наружу он
 - отказ пользователя в VPN permission
 - повторный `prepare()`, когда permission уже выдан
 - `start(config)` без permission должен вернуть контролируемую ошибку
-- `start(config)` после permission должен поднять foreground service base
+- `start(config)` после permission должен поднять Android foreground service
 - `getSnapshot()` после старта должен показать `running` и `serviceActive`
+- snapshot/message после старта должен отражать выбранный strategy profile
+- snapshot/message после старта должен отражать наличие или отсутствие нужных strategy assets
+- домен вне hostlists должен проходить direct forwarding без fake/split/udpFake действий
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
 
@@ -138,7 +153,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - не отдавать UI временные backend payloads "пока так"
 - не добавлять platform-specific логику в presentation layer
 - не расширять модели без понятного сценария использования
-- не считать `running` запущенным `tgwsproxy` без отдельной семантики
+- не считать `running` fully connected traffic forwarding без отдельной семантики
 
 ## Рекомендуемый handoff между коллегами
 
@@ -164,18 +179,24 @@ Backend реализует platform adapter так, чтобы наружу он
 Интеграция считается удачной, когда:
 
 - Android adapter реализует текущий `ProxyRuntime` contract
+- composition root передает Android `AndroidProxyRuntime` на Android и stub-адаптеры на desktop
+- UI может работать через `ProxyRuntimeController` без platform-specific кода
 - VPN permission flow стабильно проходит через `prepare()`
-- foreground service base стартует и останавливается через Dart API
+- Android foreground service стартует и останавливается через Dart API
 - `getSnapshot()` отражает реальные Android lifecycle transitions
 - ошибки permission/start/stop не ломают UI
-- `tgwsproxy` или его выбранная bridge/process-точка подключены за Android service base
+- strategy profile передается из Dart в Android bridge
+- hostlists и payload blobs дефолтной стратегии упакованы в Android assets
+- hostlists используются как включение desync-правил, а unmatched traffic сохраняет политику `direct`
+- local strategy proxy и TUN transport подключены за Android service
+- userspace forwarder передает трафик из TUN fd в локальный strategy proxy
 - `flutter analyze` и `flutter test` проходят
 
 ## Предлагаемый порядок следующих задач
 
-1. Уточнить различие между Android service base и fully connected `tgwsproxy`.
-2. Решить, как Android будет запускать и контролировать `tgwsproxy`: process boundary, bundled binary, MethodChannel orchestration или другой вариант.
-3. Расширить `ProxyRuntimeSnapshot`, если нужен отдельный статус native backend.
-4. Подключить реальный Android runtime за текущим `QnzapretVpnService`.
-5. Перевести composition/UI со stub на `AndroidProxyRuntime`, когда lifecycle станет достаточно стабильным.
+1. Уточнить различие между Android service skeleton и fully connected userspace forwarding.
+2. Реализовать userspace forwarder между TUN fd и local strategy proxy.
+3. Наполнить local strategy proxy HTTP/TLS/QUIC detectors, hostlists и split/fake actions.
+4. Добавить production log stream поверх текущего `ProxyRuntimeController`.
+5. Расширить `ProxyRuntimeSnapshot`, если нужен отдельный статус native backend.
 6. После Android описать equivalent bridge strategy для Linux и Windows.
