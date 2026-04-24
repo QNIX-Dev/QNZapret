@@ -135,4 +135,3 @@ internal object QuicInitialDetector {
 
     private const val MIN_QUIC_INITIAL_LENGTH = 7
 }
-

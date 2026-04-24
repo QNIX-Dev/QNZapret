@@ -30,4 +30,3 @@ internal object StrategyAssetStore {
         )
     }
 }
-
