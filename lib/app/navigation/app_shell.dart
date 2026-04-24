@@ -81,7 +81,8 @@ class _AppShellState extends ConsumerState<AppShell> {
                       child: ClipRect(
                         child: PageView(
                           controller: _pageController,
-                          physics: const NeverScrollableScrollPhysics(),
+                          physics: const PageScrollPhysics(),
+                          onPageChanged: _handlePageChanged,
                           children: [
                             _SharedAxisPage(
                               controller: _pageController,
@@ -115,7 +116,9 @@ class _AppShellState extends ConsumerState<AppShell> {
                     child: FloatingNavigationBar(
                       destination: settings.destination,
                       onSelect: (destination) {
-                        HapticFeedback.selectionClick();
+                        if (destination != settings.destination) {
+                          HapticFeedback.selectionClick();
+                        }
                         ref
                             .read(appSettingsControllerProvider.notifier)
                             .setDestination(destination);
@@ -156,10 +159,27 @@ class _AppShellState extends ConsumerState<AppShell> {
 
       await _pageController.animateToPage(
         target.index,
-        duration: AppMotionDurations.page,
+        duration: AppMotionDurations.slow,
         curve: AppMotionCurves.decelerate,
       );
     });
+  }
+
+  void _handlePageChanged(int index) {
+    final destination = AppDestinationX.fromIndex(index);
+    if (destination == _activeDestination) {
+      return;
+    }
+
+    HapticFeedback.selectionClick();
+    setState(() {
+      _activeDestination = destination;
+      _visitTokens[destination] = (_visitTokens[destination] ?? 0) + 1;
+    });
+
+    ref
+        .read(appSettingsControllerProvider.notifier)
+        .setDestination(destination);
   }
 
   Future<void> _openSettings(BuildContext context) {
@@ -235,19 +255,15 @@ class _SharedAxisPage extends StatelessWidget {
 
         final distance = (page - index).clamp(-1.0, 1.0);
         final t = distance.abs();
-        final direction = distance.sign;
-        final opacity = (1 - t * 0.32).clamp(0.0, 1.0);
-        final scale = 1 - t * 0.035;
+        final opacity = (1 - t * 0.12).clamp(0.0, 1.0);
+        final scale = 1 - t * 0.012;
 
         return Opacity(
           opacity: opacity,
-          child: Transform.translate(
-            offset: Offset(direction * 18 * t, 0),
-            child: Transform.scale(
-              scale: scale,
-              alignment: Alignment.center,
-              child: child,
-            ),
+          child: Transform.scale(
+            scale: scale,
+            alignment: Alignment.center,
+            child: child,
           ),
         );
       },

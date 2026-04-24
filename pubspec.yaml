@@ -31,9 +31,12 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: assets/branding/app_icon/qnzapret_app_icon_source.png
+  image_path: assets/branding/app_icon/generated/qnzapret_app_icon_fullbleed.png
   min_sdk_android: 21
+  adaptive_icon_background: "#071123"
+  adaptive_icon_foreground: assets/branding/app_icon/generated/qnzapret_app_icon_fullbleed.png
+  adaptive_icon_foreground_inset: 0
   windows:
     generate: true
-    image_path: assets/branding/app_icon/qnzapret_app_icon_source.png
+    image_path: assets/branding/app_icon/generated/qnzapret_app_icon_fullbleed.png
     icon_size: 256
