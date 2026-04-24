@@ -1,6 +1,3 @@
-[submodule ".docs"]
-	path = .qdocs
-	url = https://github.com/QNIX-Dev/QNZapret-Qurie-Docs.git
-[submodule ".ndocs"]
-	path = .ndocs
-	url = https://github.com/QNIX-Dev/QNZapret-N1x-docs.git
+[submodule "qndocs"]
+	path = qndocs
+	url = https://github.com/QNIX-Dev/QNZapret-Docs.git
