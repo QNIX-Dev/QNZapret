@@ -2,188 +2,188 @@
 
 ## Назначение документа
 
-Этот файл описывает текущую рабочую структуру проекта после первой frontend-стадии.
-Он нужен, чтобы frontend- и backend-разработчики одинаково понимали, где находится ответственность каждого слоя.
+Этот файл описывает текущую рабочую структуру проекта.
+Он должен помогать frontend- и backend-разработчикам быстро понять, где проходит ответственность каждого слоя.
 
 ## Общая карта
 
 ```text
 lib/
+  main.dart
   app/
     app.dart
-    navigation/
-    routing/
     theme/
+      app_theme.dart
   core/
-    app_metadata.dart
     backend/
-    motion/
-    persistence/
-    state/
-    ui/
+      android_proxy_runtime.dart
+      proxy_runtime.dart
   features/
     home/
-    logs/
-    settings/
-  main.dart
+      presentation/
+        home_screen.dart
+
+android/
+  app/
+    src/main/
+      AndroidManifest.xml
+      kotlin/dev/quriee/qnzapret/
+        MainActivity.kt
+        ProxyRuntimeBridge.kt
+        QnzapretVpnRuntimeStore.kt
+        QnzapretVpnService.kt
+
+linux/
+windows/
+test/
 ```
 
-## Слой `app/`
+## Слой `lib/main.dart`
+
+Минимальный bootstrap приложения.
+Здесь должен оставаться только запуск Flutter-приложения, без логики фич и runtime-интеграции.
+
+## Слой `lib/app/`
 
 Назначение:
 
 - app-level composition
-- shell приложения
-- общая навигация
-- глобальная тема
+- корневой `MaterialApp`
+- общая тема приложения
 
 Текущие файлы:
 
 - `lib/app/app.dart`
-  Корневая конфигурация `MaterialApp`, подключение темы и app shell.
-- `lib/app/navigation/app_shell.dart`
-  Общая оболочка с переключением вкладок и открытием settings screen.
-- `lib/app/navigation/floating_navigation_bar.dart`
-  Кастомная нижняя floating navigation bar.
-- `lib/app/routing/app_destination.dart`
-  Доменные destination для навигации.
+  Корневая конфигурация приложения.
 - `lib/app/theme/app_theme.dart`
-  Theme system, palette definitions и `ThemeExtension`.
+  Общая визуальная система, цвета и типографика.
 
-## Слой `core/`
+Текущий UI намеренно оформлен как продуктовый shell, а не стандартное Flutter demo.
+Без явной необходимости этот слой лучше не перестраивать, потому что UI-направление развивается отдельно.
 
-Назначение:
+## Слой `lib/core/backend/`
 
-- общие модели
-- backend bridge contracts
-- shared state
-- persistence
-- design tokens и reusable UI
-
-### `lib/core/backend/`
-
-Зона интеграции frontend и backend.
+Это главная зона runtime-контрактов и platform adapters.
 
 Файлы:
 
-- `runtime_models.dart`
-  Доменные runtime-модели и статусы.
-- `runtime_bridge.dart`
-  Главный интерфейс bridge-слоя.
-- `stub_runtime_bridge.dart`
-  Временная demo-реализация до подключения реального backend.
+- `proxy_runtime.dart`
+  Общий Dart-контракт runtime:
+  - `ProxyPlatform`
+  - `ProxyRuntimeState`
+  - `ProxyPrepareResult`
+  - `ProxyLaunchConfig`
+  - `ProxyRuntimeSnapshot`
+  - `ProxyRuntime`
+  - `StubProxyRuntime`
+- `android_proxy_runtime.dart`
+  Android adapter поверх `MethodChannel`.
 
-Правило:
+Правила:
 
-- любые реальные platform adapters должны соответствовать этим контрактам
-- UI не должен импортировать platform-specific код
+- UI должен зависеть от общего Dart API, а не от Kotlin/Android деталей.
+- Новые platform adapters нужно добавлять за тем же контрактом или через его осознанное расширение.
+- Если контракт меняется, одновременно обновляются код, `docs/runtime_bridge_contract.md` и при необходимости `AGENTS.md`.
 
-### `lib/core/state/`
+## Слой `lib/features/home/`
 
-Application/state layer.
+Текущий стартовый продуктовый экран.
 
-Файлы:
+Файл:
 
-- `runtime_controller.dart`
-  Управляет combined runtime state, логами, ошибками и rollback flow.
-- `app_settings_controller.dart`
-  Управляет theme mode, palette и последней вкладкой.
-- `package_info_provider.dart`
-  Получает platform version info.
+- `lib/features/home/presentation/home_screen.dart`
 
-### `lib/core/persistence/`
+Экран показывает:
 
-- `shared_preferences_provider.dart`
-  Точка доступа к локальному persistence-слою.
+- брендированный первый экран QNZapret
+- текущий runtime snapshot
+- поддерживаемые платформы
+- ближайшие backend milestones
 
-### `lib/core/motion/`
+Сейчас экран использует `StubProxyRuntime`, поэтому фактический Android service еще не запускается из UI.
+Это важно учитывать при backend-интеграции: наличие Android adapter в коде еще не означает, что экран уже переведен на production lifecycle.
 
-- `app_motion.dart`
-  Общие motion tokens проекта.
+## Android слой
 
-### `lib/core/ui/`
+Текущий Android runner уже содержит начатую runtime-интеграцию.
 
-Общие visual building blocks и design tokens.
+Файлы приложения:
 
-Файлы:
+- `android/app/src/main/AndroidManifest.xml`
+  Разрешения, activity, VPN service declaration и foreground service metadata.
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/MainActivity.kt`
+  Регистрирует `ProxyRuntimeBridge` и прокидывает `onActivityResult` для VPN prepare flow.
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/ProxyRuntimeBridge.kt`
+  `MethodChannel` bridge между Dart и Android runtime base.
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnService.kt`
+  База foreground `VpnService`.
+  Сейчас поднимает service shell и notification, но реальный tunnel еще не строит.
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnRuntimeStore.kt`
+  In-memory snapshot store для Android runtime-состояния.
 
-- `design_tokens.dart`
-- `app_backdrop.dart`
-- `components/connected_flow_illustration.dart`
-- `components/palette_preview_card.dart`
-- `components/premium_cta_button.dart`
-- `components/settings_section_card.dart`
-- `components/staggered_reveal.dart`
-- `components/status_chip.dart`
-- `components/terminal_surface.dart`
+Channel:
 
-## Слой `features/`
+- `dev.quriee.qnzapret/proxy_runtime`
 
-Вертикальная продуктовая организация по экранам.
+Текущие native methods:
 
-### `lib/features/home/`
+- `prepare`
+- `getSnapshot`
+- `start`
+- `stop`
 
-- `presentation/home_screen.dart`
-  Главный экран, статусы сервисов, CTA запуска и expressive hero-композиция.
-
-### `lib/features/logs/`
-
-- `presentation/logs_screen.dart`
-  Экран логов с live terminal surface и базовыми controls.
-
-### `lib/features/settings/`
-
-- `presentation/settings_screen.dart`
-  Настройки темы, палитры, demo-сценариев bridge и блок "О приложении".
-
-## Платформенные директории
-
-### `android/`
-
-Текущий Android runner и сборка.
-Сюда позже встанут Android-specific точки интеграции с backend-слоем:
-
-- foreground/background service concerns
-- notifications
-- lifecycle hooks
-- Android bridge к Go runtime
+## Desktop слои
 
 ### `linux/`
 
-Linux desktop runner и release bundle.
-Сюда позже встанет Linux-specific bridge или process adapter.
+Текущий Linux runner.
+Реальный Linux bridge или process adapter еще не реализован.
 
 ### `windows/`
 
-Windows desktop runner.
-Сюда позже встанет Windows-specific bridge или process adapter.
+Текущий Windows runner.
+Реальный Windows bridge или process adapter еще не реализован.
+
+## Тесты
+
+Текущие тесты находятся в:
+
+- `test/core/backend/proxy_runtime_test.dart`
+- `test/widget_test.dart`
+
+При значимых изменениях runtime-контракта нужно запускать:
+
+- `flutter analyze`
+- `flutter test`
 
 ## Границы ответственности
 
 Frontend отвечает за:
 
-- UX
-- visual states
-- theme/motion/navigation
-- application/state layer
-- адаптацию runtime-данных к UI
+- UI/UX
+- theme
+- presentation layer
+- product flows
 
 Backend отвечает за:
 
-- реальный lifecycle сервисов
-- запуск и остановку runtime
-- реальные runtime status transitions
-- delivery логов и ошибок
+- runtime contracts
+- platform adapters
+- запуск и остановку нативного runtime
+- Android service lifecycle
+- future logs/status/failure delivery
 
 Shared responsibility:
 
-- согласование bridge contract
-- фиксация допустимых статусов и lifecycle semantics
-- тестовые сценарии частичного запуска и частичных отказов
+- стабильность Dart runtime API
+- lifecycle semantics
+- перечень поддерживаемых платформ
+- фиксация изменений в документации
 
 ## Что нельзя делать
 
-- вызывать Go runtime из виджетов
-- смешивать platform code и presentation layer
-- зашивать в UI новые backend payloads без адаптации через `core/backend`
-- вносить реальную backend-логику в `.sources` как production-код frontend
+- вызывать `tgwsproxy` или другой platform runtime из виджетов напрямую
+- смешивать platform-specific payloads с presentation layer
+- разбрасывать backend-состояние по виджетам вместо расширения `ProxyRuntime`
+- вручную править generated Flutter files без необходимости
+- вносить production backend-код в `.sources/`

@@ -2,12 +2,15 @@
 
 ## Назначение документа
 
-Этот файл фиксирует текущий контракт между frontend и будущими backend/platform implementations.
+Этот файл фиксирует текущий контракт между Flutter frontend и platform/runtime implementations.
 
 Источник кода:
 
-- `lib/core/backend/runtime_bridge.dart`
-- `lib/core/backend/runtime_models.dart`
+- `lib/core/backend/proxy_runtime.dart`
+- `lib/core/backend/android_proxy_runtime.dart`
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/ProxyRuntimeBridge.kt`
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnRuntimeStore.kt`
+- `android/app/src/main/kotlin/dev/quriee/qnzapret/QnzapretVpnService.kt`
 
 Если код и документ расходятся, источником правды считается код.
 При любом существенном изменении контракта нужно обновлять и код, и этот документ в одном наборе изменений.
@@ -16,314 +19,278 @@
 
 Сделать так, чтобы:
 
-- frontend мог полноценно работать от стабильного абстрактного API
-- backend мог развиваться независимо от UI
-- замена `StubRuntimeBridge` на реальную реализацию не требовала переписывания экранов
+- frontend работал от стабильного Dart API
+- Android/Linux/Windows adapters можно было развивать независимо от UI
+- backend-состояние не расползалось по виджетам
+- platform-specific детали не попадали напрямую в presentation layer
 
-## Сервисы
-
-На текущем этапе frontend ожидает два runtime-сервиса:
-
-- `BypassServiceType.nfqws`
-- `BypassServiceType.telegramProxy`
-
-Технические имена:
-
-- `nfqws`
-- `Proxy`
-
-Публичные пользовательские подписи уже задаются на frontend-стороне:
-
-- `Основной сервис обхода`
-- `Telegram-портал`
-
-## Обязательный интерфейс bridge
+## Актуальный Dart API
 
 ```dart
-abstract interface class RuntimeBridge {
-  RuntimeBridgeCapabilities get capabilities;
+abstract interface class ProxyRuntime {
+  Future<ProxyPrepareResult> prepare();
 
-  Future<ServiceLaunchResult> startService(BypassServiceType serviceType);
-  Future<CombinedRuntimeState> startAllServices();
-  Future<CombinedRuntimeState> stopAllServices();
-  Future<ServiceRuntimeStatus> getServiceStatus(BypassServiceType serviceType);
-  Future<CombinedRuntimeState> getCombinedState();
-  Future<RuntimeFailure?> getLatestFailure();
+  Future<ProxyRuntimeSnapshot> getSnapshot();
 
-  Stream<CombinedRuntimeState> watchRuntimeState();
-  Stream<RuntimeLogEntry> watchLogs();
-  Stream<RuntimeFailure> watchFailures();
+  Future<void> start(ProxyLaunchConfig config);
 
-  void dispose();
+  Future<void> stop();
 }
 ```
 
-## Что означают методы
+Текущие реализации:
 
-### `startService`
+- `StubProxyRuntime` - stub для состояния, где нативный backend еще не подключен.
+- `AndroidProxyRuntime` - adapter поверх Android `MethodChannel`.
 
-Назначение:
-
-- точечный запуск одного сервиса
-
-Важно:
-
-- сейчас UI в основном работает через `startAllServices()`
-- метод всё равно нужен как отдельная точка входа и для будущих platform scenarios
-
-### `startAllServices`
-
-Назначение:
-
-- запуск общего продукта одним действием пользователя
-
-Ожидание frontend:
-
-- оба сервиса должны начать lifecycle переход
-- runtime state должен обновляться потоково
-- каждый сервис может завершить запуск независимо
-
-### `stopAllServices`
-
-Назначение:
-
-- общая команда остановки
-
-Ожидание frontend:
-
-- сервисы должны пройти через последовательный stop-flow
-- статус не должен прыгать резко из `running` в `idle` без промежуточного `stopping`
-
-### `getServiceStatus`
-
-Назначение:
-
-- единичный snapshot состояния одного сервиса
-
-### `getCombinedState`
-
-Назначение:
-
-- получить целиком актуальное состояние runtime на текущий момент
-
-### `getLatestFailure`
-
-Назначение:
-
-- отдать последнюю известную ошибку runtime
-
-### `watchRuntimeState`
-
-Главный поток состояний для UI.
-
-Ожидание frontend:
-
-- stream должен отдавать актуальное `CombinedRuntimeState`
-- stream не должен требовать знания platform-specific деталей
-
-### `watchLogs`
-
-Поток логов для экрана логов.
-
-Ожидание frontend:
-
-- строки должны приходить как `RuntimeLogEntry`
-- лог-стрим не должен блокировать UI
-
-### `watchFailures`
-
-Поток ошибок lifecycle-операций.
-
-Ожидание frontend:
-
-- ошибки старта и остановки должны приходить отдельно
-- `serviceType` может быть как конкретным, так и `null`, если ошибка общесистемная
-
-## Доменные статусы
+## Платформы
 
 ```dart
-enum ServiceRuntimeStatus {
-  idle,
-  starting,
-  running,
-  stopping,
-  failed,
-}
+enum ProxyPlatform { android, linux, windows }
+```
+
+Текущий реальный adapter начат только для Android.
+Linux и Windows должны по возможности прийти к той же Dart-поверхности runtime.
+
+## Runtime states
+
+```dart
+enum ProxyRuntimeState { idle, starting, running, stopping, failed }
 ```
 
 Интерпретация:
 
-- `idle` — сервис не активен и готов к запуску
-- `starting` — сервис находится в процессе запуска
-- `running` — сервис успешно работает
-- `stopping` — сервис находится в процессе остановки
-- `failed` — сервис завершил операцию с ошибкой
+- `idle` - runtime не активен и готов к следующему действию
+- `starting` - runtime находится в процессе запуска
+- `running` - runtime service base активен
+- `stopping` - runtime находится в процессе остановки
+- `failed` - операция runtime завершилась ошибкой или runtime не может продолжать работу
+
+Важно: сейчас `running` на Android означает, что foreground `VpnService` base активен.
+Это еще не означает, что `tgwsproxy` и VPN tunnel полностью подключены.
 
 ## Модели
 
-### `RuntimeFailure`
+### `ProxyPrepareResult`
 
 Назначение:
 
-- нормализованная ошибка runtime-слоя
+- результат подготовки platform runtime перед запуском
+- на Android сейчас отражает результат VPN permission flow
 
 Поля:
 
-- `code`
+- `granted`
 - `message`
-- `commandType`
-- `timestamp`
-- `serviceType`
-- `details`
-- `recoverable`
 
-Требование:
+Wire payload:
 
-- `message` должен быть пригоден для пользовательского UI
-- `details` может содержать более техническое описание
+```dart
+{
+  'granted': true,
+  'message': 'VPN permission granted. Android service base is ready to start.',
+}
+```
 
-### `ServiceRuntimeState`
-
-Назначение:
-
-- snapshot состояния одного сервиса
-
-Поля:
-
-- `type`
-- `status`
-- `updatedAt`
-- `failure`
-
-### `ServiceLaunchResult`
+### `ProxyLaunchConfig`
 
 Назначение:
 
-- результат отдельной операции запуска
+- минимальная конфигурация запуска runtime
+- передается из Dart в platform adapter
 
 Поля:
 
-- `serviceType`
-- `status`
-- `timestamp`
-- `failure`
+- `localHost`
+- `localPort`
+- `poolSize`
+- `cloudflareEnabled`
+- `secret`
 
-### `CombinedRuntimeState`
+Wire payload:
+
+```dart
+{
+  'localHost': '127.0.0.1',
+  'localPort': 1080,
+  'poolSize': 8,
+  'cloudflareEnabled': true,
+  'secret': 'token',
+}
+```
+
+Текущий Android service читает эти значения и использует их только как runtime target metadata.
+Реальное подключение к `tgwsproxy` еще не реализовано.
+
+### `ProxyRuntimeSnapshot`
 
 Назначение:
 
-- общий runtime snapshot для всего UI
+- единый snapshot текущего runtime-состояния для UI и application layer
 
 Поля:
 
-- `services`
-- `updatedAt`
-
-Важные derived semantics на frontend:
-
-- `isIdle`
-- `isFullyRunning`
-- `hasRunningServices`
-- `hasFailure`
-- `hasActiveServices`
-- `isTransitioning`
-- `hasPartialFailure`
-- `summaryStatus`
-
-### `RuntimeLogEntry`
-
-Назначение:
-
-- единичная запись лог-стрима
-
-Поля:
-
-- `id`
-- `timestamp`
-- `level`
+- `platform`
+- `state`
 - `message`
-- `serviceType`
+- `backendConnected`
+- `vpnPermissionGranted`
+- `serviceActive`
 
-`RuntimeLogLevel`:
+Wire payload:
 
-- `system`
-- `info`
-- `success`
-- `warning`
-- `error`
+```dart
+{
+  'platform': 'android',
+  'state': 'running',
+  'message': 'Android VPN service base is active.',
+  'backendConnected': true,
+  'vpnPermissionGranted': true,
+  'serviceActive': true,
+}
+```
 
-### `RuntimeBridgeCapabilities`
+Семантика:
+
+- `backendConnected` сейчас означает, что platform bridge base доступен, а не что `tgwsproxy` уже запущен.
+- `vpnPermissionGranted` актуально для Android.
+- `serviceActive` отражает активность Android service base.
+- `message` должен быть пригоден для отображения в UI.
+
+## Методы
+
+### `prepare()`
 
 Назначение:
 
-- зафиксировать возможности конкретной bridge-реализации
+- подготовить platform runtime перед запуском
+- на Android запросить или проверить VPN permission
 
-Поля:
+Android behavior:
 
-- `supportedServices`
-- `supportsLogStream`
-- `supportsSimulationControls`
+- если `VpnService.prepare(activity)` возвращает `null`, permission уже доступен
+- иначе открывается системный consent flow
+- результат возвращается как `ProxyPrepareResult`
+
+Возможная native error:
+
+- `vpn_prepare_in_progress` - запрос разрешения уже выполняется
+
+### `getSnapshot()`
+
+Назначение:
+
+- получить актуальный snapshot runtime-состояния
+
+Android behavior:
+
+- вызывает `QnzapretVpnRuntimeStore.snapshot(context)`
+- синхронизирует текущее VPN permission state через `VpnService.prepare(context)`
+
+### `start(ProxyLaunchConfig config)`
+
+Назначение:
+
+- запустить platform runtime с заданной конфигурацией
+
+Android behavior:
+
+- требует уже выданного VPN permission
+- переводит store в `starting`
+- запускает `QnzapretVpnService` как foreground service
+- service переводит store в `running`, если base успешно поднят
+
+Возможная native error:
+
+- `vpn_permission_required` - запуск невозможен без VPN permission
+
+Важно: `start()` возвращает `Future<void>`.
+Для получения итогового состояния нужно вызвать `getSnapshot()` после native lifecycle update.
+
+### `stop()`
+
+Назначение:
+
+- остановить platform runtime
+
+Android behavior:
+
+- переводит store в `stopping`
+- вызывает `stopService`
+- если service уже не был активен, store возвращается в `idle`
+- `QnzapretVpnService.onDestroy()` также переводит store в `idle`
+
+## Android MethodChannel contract
+
+Channel:
+
+```text
+dev.quriee.qnzapret/proxy_runtime
+```
+
+Methods:
+
+- `prepare`
+- `getSnapshot`
+- `start`
+- `stop`
+
+`start` arguments:
+
+```dart
+{
+  'config': ProxyLaunchConfig(...).toMap(),
+}
+```
+
+Native return values:
+
+- `prepare` возвращает map с `granted` и `message`
+- `getSnapshot` возвращает map для `ProxyRuntimeSnapshot.fromMap`
+- `start` возвращает `null` при успешной отправке команды запуска
+- `stop` возвращает `null` при успешной отправке команды остановки
 
 ## Lifecycle expectations
 
-## Успешный старт обоих сервисов
+### Android prepare flow
 
-Ожидаемая последовательность:
+1. UI/application layer вызывает `prepare()`.
+2. Android bridge проверяет `VpnService.prepare`.
+3. Если нужно разрешение, открывается системный consent screen.
+4. Результат возвращается в Dart как `ProxyPrepareResult`.
+5. `getSnapshot()` после prepare должен отражать актуальный `vpnPermissionGranted`.
 
-1. Пользователь вызывает `startAllServices()`.
-2. Bridge начинает отдавать `CombinedRuntimeState` со статусами `starting`.
-3. Каждый сервис отдельно переходит в `running`.
-4. Когда оба сервиса `running`, frontend считает систему активной.
+### Android start flow
 
-## Частичный отказ
+1. UI/application layer вызывает `start(config)`.
+2. Если permission отсутствует, Android bridge возвращает ошибку `vpn_permission_required`.
+3. Если permission есть, store получает `starting`.
+4. Foreground `QnzapretVpnService` стартует.
+5. Service получает config metadata и переводит store в `running`.
+6. `getSnapshot()` возвращает актуальное состояние.
 
-Ожидаемая последовательность:
+### Android stop flow
 
-1. Общий запуск начался.
-2. Один сервис ушёл в `running`.
-3. Второй сервис ушёл в `failed`.
-4. Frontend показывает partial-failure flow.
-5. `RuntimeController` планирует мягкий rollback через `stopAllServices()`.
+1. UI/application layer вызывает `stop()`.
+2. Store получает `stopping`.
+3. Android service останавливается.
+4. Store возвращается в `idle`.
 
-Важно:
-
-- этот сценарий уже встроен в frontend и должен учитываться backend-командой
-
-## Остановка
-
-Ожидаемая последовательность:
-
-1. Пользователь вызывает `stopAllServices()`.
-2. Активные сервисы переходят в `stopping`.
-3. После завершения stop-flow все сервисы переходят в `idle`.
-
-## Требования к реальной backend-реализации
+## Требования к будущей backend-реализации
 
 - Не отдавать platform-specific payloads напрямую в UI.
-- Не смешивать runtime handles с доменными моделями frontend.
-- Все низкоуровневые события сначала адаптировать до моделей этого контракта.
-- Поддерживать потоковое обновление runtime state и логов.
-- Не требовать от UI знания Android/Linux/Windows-specific деталей.
+- Не смешивать runtime handles с Flutter widgets.
+- Все низкоуровневые события сначала адаптировать до Dart-моделей контракта.
+- Сохранять единый runtime API для Android/Linux/Windows, насколько это возможно.
+- Не расширять контракт без понятного UI/backend сценария.
+- При добавлении logs/status streams зафиксировать их здесь до активного использования в UI.
 
-## Временная реализация
+## Что желательно согласовать до подключения `tgwsproxy`
 
-Сейчас frontend использует `StubRuntimeBridge`.
-
-Он умеет:
-
-- успешно запускать оба сервиса
-- симулировать запуск только `nfqws`
-- симулировать запуск только `telegramProxy`
-- публиковать статусные переходы
-- публиковать логи
-- публиковать ошибки
-
-Эта реализация нужна только как demo bridge и не является production backend.
-
-## Что желательно согласовать с backend до начала интеграции
-
-- будет ли Android bridge идти через Kotlin + channels/Pigeon
-- будет ли Linux/Windows bridge идти через FFI или через process boundary
-- как backend будет формировать `RuntimeLogEntry.id`
-- какие `RuntimeFailure.code` считаются стабильными
-- есть ли необходимость в дополнительных командах вроде restart, health-check, diagnostics snapshot
+- как Android будет запускать и контролировать `tgwsproxy`: process boundary, bundled binary, MethodChannel orchestration или другой механизм
+- какие поля `ProxyLaunchConfig` останутся стабильными
+- какие native error codes считаются публичными
+- как отличать "Android service base running" от "`tgwsproxy` fully running"
+- как будет устроен log stream
+- нужен ли отдельный health-check или diagnostics snapshot
+- какая форма desktop adapters нужна для Linux и Windows
