@@ -30,13 +30,13 @@ internal class TunTransport(
         if (!config.establishTunnel) {
             return TunTransportState(
                 active = false,
-                forwarderReady = capabilities.fullyReady,
+                forwarderReady = false,
                 packetCodecReady = capabilities.packetCodecReady,
                 udpForwarderReady = capabilities.udpForwarderReady,
                 ipv6PacketCodecReady = capabilities.ipv6PacketCodecReady,
                 ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
-                message = "TUN establishment is deferred. IPv4/IPv6 packet codec and UDP relay are ready; TCP relay is pending.",
+                message = "TUN establishment is deferred. IPv4/IPv6 packet codec, UDP relay, and TCP relay are ready.",
             )
         }
 
@@ -50,7 +50,7 @@ internal class TunTransport(
                 ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
                 tcpForwarderReady = capabilities.tcpForwarderReady,
                 message = "TUN establishment was requested for local proxy " +
-                    "${proxyEndpoint.host}:${proxyEndpoint.port}, but TCP relay is pending.",
+                    "${proxyEndpoint.host}:${proxyEndpoint.port}, but a required forwarder capability is unavailable.",
             )
         }
 
@@ -78,7 +78,7 @@ internal class TunTransport(
 
         return TunTransportState(
             active = true,
-            forwarderReady = forwarderStatus.capabilities.fullyReady,
+            forwarderReady = forwarderStatus.running && forwarderStatus.capabilities.fullyReady,
             packetCodecReady = forwarderStatus.capabilities.packetCodecReady,
             udpForwarderReady = forwarderStatus.capabilities.udpForwarderReady,
             ipv6PacketCodecReady = forwarderStatus.capabilities.ipv6PacketCodecReady,

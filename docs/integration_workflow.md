@@ -128,7 +128,10 @@ Backend реализует platform adapter так, чтобы наружу он
 - snapshot/message после старта должен отражать выбранный strategy profile
 - snapshot/message после старта должен отражать наличие или отсутствие нужных strategy assets
 - snapshot после старта должен различать `strategyEngineReady`, `trafficForwarderReady`, `tunnelActive`, `packetCodecReady`, `udpForwarderReady`, `ipv6PacketCodecReady`, `ipv6UdpForwarderReady` и `tcpForwarderReady`
+- при `establishTunnel=false` snapshot должен показывать готовые capability flags, но `trafficForwarderReady=false` и `tunnelActive=false`
+- при `establishTunnel=true` Android должен поднимать TUN fd только если TCP/UDP forwarder capabilities готовы
 - домен вне hostlists должен проходить direct forwarding без fake/split/udpFake действий
+- TCP hostlist match должен применять `split` как best-effort stream write split и не отправлять небезопасный TCP `fake` в protected socket mode
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
 
@@ -195,7 +198,7 @@ Backend реализует platform adapter так, чтобы наружу он
 - strategy profile передается из Dart в Android bridge
 - hostlists и payload blobs дефолтной стратегии упакованы в Android assets
 - native strategy engine загружает payload blobs, регистрирует hostlists и возвращает direct/desync decisions
-- IPv4/IPv6 packet codec и UDP relay core готовы, но не включают TUN default-route без TCP relay
+- IPv4/IPv6 packet codec, UDP relay core и TCP relay/state machine готовы; TUN default-route включается только при явном `establishTunnel=true`
 - hostlists используются как включение desync-правил, а unmatched traffic сохраняет политику `direct`
 - local strategy proxy и TUN transport подключены за Android service
 - userspace forwarder передает трафик из TUN fd в локальный strategy proxy
@@ -203,9 +206,8 @@ Backend реализует platform adapter так, чтобы наружу он
 
 ## Предлагаемый порядок следующих задач
 
-1. Реализовать TCP userspace relay/state machine между TUN fd и protected sockets.
-2. Подключить TCP split actions к stream forwarding и явно пропускать небезопасный TCP fake в no-root socket mode.
-3. Добавить QUIC host correlation для hostlist-based `udpFake`.
-4. Добавить production log stream поверх текущего `ProxyRuntimeController`.
-5. Расширить diagnostics snapshot, если UI понадобится больше runtime health-полей.
-6. После Android описать equivalent bridge strategy для Linux и Windows.
+1. Захарднить TCP userspace relay/state machine: retransmit, backpressure, idle timeout и диагностика.
+2. Добавить QUIC host correlation для hostlist-based `udpFake`.
+3. Добавить production log stream поверх текущего `ProxyRuntimeController`.
+4. Расширить diagnostics snapshot, если UI понадобится больше runtime health-полей.
+5. После Android описать equivalent bridge strategy для Linux и Windows.

@@ -45,9 +45,9 @@ Android-направление строится как no-root VPN/proxy runtime
 - Android strategy runtime coordinator в `QnzapretAndroidRuntime.kt`
 - Android local strategy proxy lifecycle в `LocalStrategyProxy.kt`
 - native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
-- IPv4/IPv6 UDP packet codec в `IpPacketCodec.kt`
-- userspace forwarder core в `TunPacketForwarder.kt` с IPv4/IPv6 UDP relay через protected `DatagramSocket`
-- TUN lifecycle guard в `TunTransport.kt`, который держит IPv4/IPv6 TUN routes выключенными до готовности полного TCP/UDP forwarder
+- IPv4/IPv6 UDP packet codec и TCP segment codec в `IpPacketCodec.kt`
+- userspace forwarder core в `TunPacketForwarder.kt` с IPv4/IPv6 UDP relay через protected `DatagramSocket` и TCP relay/state machine через protected `Socket`
+- TUN lifecycle в `TunTransport.kt`: default-route остается выключенным при `establishTunnel=false`, но может подниматься при готовых TCP/UDP capabilities и явном `establishTunnel=true`
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
@@ -55,9 +55,8 @@ Android-направление строится как no-root VPN/proxy runtime
 
 Что еще не подключено:
 
-- реальная socket/proxy implementation для HTTP/TLS/QUIC потоков
-- TCP userspace relay/state machine между TUN fd и protected sockets
-- безопасное применение split/fake decisions к TCP stream forwarding
+- production-hardening TCP relay: retransmit/backpressure/idle cleanup/расширенная диагностика
+- raw TCP `fake`/sequence tricks в no-root socket mode; текущий TCP path безопасно применяет только split как best-effort stream write split и пропускает небезопасный fake
 - QUIC host correlation для применения `udpFake` не только при заранее известном host target
 - поток логов из backend
 - desktop bridge implementations для Linux и Windows
@@ -132,7 +131,7 @@ Composition root уже передает в экран `createDefaultProxyRuntim
 
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
-1. реализовать TCP userspace relay/state machine между TUN fd и protected sockets;
-2. подключить TCP split actions и QUIC host correlation к существующему strategy engine;
+1. захарднить TCP userspace relay/state machine: retransmit, backpressure, idle timeout и диагностика;
+2. добавить QUIC host correlation к существующему strategy engine;
 3. добавить production log stream поверх текущего controller/snapshot слоя;
 4. после Android закрепить equivalent contract для Linux и Windows.

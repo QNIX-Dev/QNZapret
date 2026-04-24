@@ -5,10 +5,14 @@ import android.os.ParcelFileDescriptor
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -44,6 +48,7 @@ internal class TunPacketForwarder(
     private val running = AtomicBoolean(false)
     private val outputLock = Any()
     private val udpSessions = ConcurrentHashMap<UdpFlowKey, UdpRelaySession>()
+    private val tcpSessions = ConcurrentHashMap<TcpFlowKey, TcpRelaySession>()
     private var readerThread: Thread? = null
     private var output: FileOutputStream? = null
 
@@ -65,7 +70,7 @@ internal class TunPacketForwarder(
         return TunPacketForwarderStatus(
             running = true,
             capabilities = CAPABILITIES,
-            message = "TUN packet forwarder started with IPv4/IPv6 UDP support.",
+            message = "TUN packet forwarder started with IPv4/IPv6 TCP and UDP support.",
         )
     }
 
@@ -73,6 +78,8 @@ internal class TunPacketForwarder(
         running.set(false)
         udpSessions.values.forEach(UdpRelaySession::close)
         udpSessions.clear()
+        tcpSessions.values.forEach(TcpRelaySession::close)
+        tcpSessions.clear()
 
         try {
             output?.close()
@@ -113,9 +120,7 @@ internal class TunPacketForwarder(
         val packet = IpPacketCodec.parseIpPacket(buffer, packetLength) ?: return
         when (packet.protocol) {
             IpProtocolNumber.UDP -> forwardUdp(buffer, packet)
-            IpProtocolNumber.TCP -> {
-                // TCP userspace forwarding needs a stream state machine before TUN can be enabled.
-            }
+            IpProtocolNumber.TCP -> forwardTcp(buffer, packet)
         }
     }
 
@@ -151,11 +156,94 @@ internal class TunPacketForwarder(
         session.send(datagram.payload)
     }
 
+    private fun forwardTcp(buffer: ByteArray, packet: IpPacket) {
+        val segment = IpPacketCodec.parseTcpSegment(buffer, packet) ?: return
+        val key = TcpFlowKey.from(segment)
+
+        if (segment.hasSyn && !segment.hasAck) {
+            val existingSession = tcpSessions[key]
+            if (existingSession != null) {
+                existingSession.handleSegment(segment)
+                return
+            }
+
+            val session = TcpRelaySession(
+                service = service,
+                localProxy = localProxy,
+                key = key,
+                initialSegment = segment,
+                mtu = mtu,
+                isRunning = { running.get() },
+                packetWriter = ::writePacketToTun,
+                onClosed = { closedSession -> tcpSessions.remove(key, closedSession) },
+            )
+            val previousSession = tcpSessions.putIfAbsent(key, session)
+            if (previousSession == null) {
+                try {
+                    session.start()
+                } catch (_: IOException) {
+                    tcpSessions.remove(key, session)
+                }
+            } else {
+                session.close()
+                previousSession.handleSegment(segment)
+            }
+            return
+        }
+
+        val session = tcpSessions[key]
+        if (session == null) {
+            sendResetForUnknownTcpSession(segment)
+            return
+        }
+
+        session.handleSegment(segment)
+    }
+
+    private fun sendResetForUnknownTcpSession(segment: TcpSegment) {
+        if (segment.hasRst) {
+            return
+        }
+
+        val segmentLength = segment.sequenceLength()
+        val flags: Int
+        val sequenceNumber: Int
+        val acknowledgementNumber: Int
+        if (segment.hasAck) {
+            flags = TcpFlags.RST
+            sequenceNumber = segment.acknowledgementNumber
+            acknowledgementNumber = 0
+        } else {
+            flags = TcpFlags.RST or TcpFlags.ACK
+            sequenceNumber = 0
+            acknowledgementNumber = addSequence(segment.sequenceNumber, segmentLength)
+        }
+
+        val response = IpPacketCodec.buildTcpPacket(
+            ipVersion = segment.ipVersion,
+            sourceAddress = segment.destinationAddress,
+            destinationAddress = segment.sourceAddress,
+            sourcePort = segment.destinationPort,
+            destinationPort = segment.sourcePort,
+            sequenceNumber = sequenceNumber,
+            acknowledgementNumber = acknowledgementNumber,
+            flags = flags,
+            windowSize = 0,
+        )
+        writePacketToTun(response)
+    }
+
     private fun writePacketToTun(packet: ByteArray) {
         val currentOutput = output ?: return
-        synchronized(outputLock) {
-            currentOutput.write(packet)
-            currentOutput.flush()
+        try {
+            synchronized(outputLock) {
+                currentOutput.write(packet)
+                currentOutput.flush()
+            }
+        } catch (_: IOException) {
+            if (running.get()) {
+                running.set(false)
+            }
         }
     }
 
@@ -176,6 +264,390 @@ internal class TunPacketForwarder(
                     destinationPort = datagram.destinationPort,
                 )
             }
+        }
+    }
+
+    private data class TcpFlowKey(
+        val ipVersion: IpVersion,
+        val sourceAddress: InetAddress,
+        val sourcePort: Int,
+        val destinationAddress: InetAddress,
+        val destinationPort: Int,
+    ) {
+        companion object {
+            fun from(segment: TcpSegment): TcpFlowKey {
+                return TcpFlowKey(
+                    ipVersion = segment.ipVersion,
+                    sourceAddress = segment.sourceAddress,
+                    sourcePort = segment.sourcePort,
+                    destinationAddress = segment.destinationAddress,
+                    destinationPort = segment.destinationPort,
+                )
+            }
+        }
+    }
+
+    private class TcpRelaySession(
+        private val service: VpnService,
+        private val localProxy: LocalStrategyProxy,
+        private val key: TcpFlowKey,
+        private val initialSegment: TcpSegment,
+        private val mtu: Int,
+        private val isRunning: () -> Boolean,
+        private val packetWriter: (ByteArray) -> Unit,
+        private val onClosed: (TcpRelaySession) -> Unit,
+    ) : AutoCloseable {
+        private val closed = AtomicBoolean(false)
+        private val stateLock = Any()
+        private val socket = Socket()
+        private val pendingPayloads = ArrayDeque<ByteArray>()
+        private var connectorThread: Thread? = null
+        private var receiverThread: Thread? = null
+        private var remoteOutput: OutputStream? = null
+        private var clientNextSequence = addSequence(initialSegment.sequenceNumber, 1)
+        private val serverInitialSequence = initialServerSequence(key, initialSegment)
+        private var serverNextSequence = addSequence(serverInitialSequence, 1)
+        private var strategyEvaluated = false
+        private var clientFinReceived = false
+        private var finSentToClient = false
+
+        fun start() {
+            if (!service.protect(socket)) {
+                sendResetToClient()
+                close()
+                throw IOException("Failed to protect TCP socket from VPN routing loop.")
+            }
+
+            socket.tcpNoDelay = true
+            socket.soTimeout = SOCKET_TIMEOUT_MS
+            sendSynAck()
+            connectorThread = Thread(::connectLoop, "QNZapret-TCP-connect-${key.destinationPort}").apply {
+                isDaemon = true
+                start()
+            }
+        }
+
+        fun handleSegment(segment: TcpSegment) {
+            if (closed.get()) {
+                return
+            }
+
+            if (segment.hasRst) {
+                close()
+                return
+            }
+
+            if (segment.hasSyn && !segment.hasAck) {
+                sendSynAck()
+                return
+            }
+
+            var payloadToForward: ByteArray? = null
+            var acceptedFin = false
+            var shouldAck = false
+
+            synchronized(stateLock) {
+                if (segment.payload.isNotEmpty()) {
+                    if (segment.sequenceNumber == clientNextSequence) {
+                        clientNextSequence = addSequence(clientNextSequence, segment.payload.size)
+                        payloadToForward = segment.payload
+                        shouldAck = true
+                    } else {
+                        shouldAck = true
+                    }
+                }
+
+                if (segment.hasFin) {
+                    val finSequence = addSequence(segment.sequenceNumber, segment.payload.size)
+                    if (finSequence == clientNextSequence && !clientFinReceived) {
+                        clientNextSequence = addSequence(clientNextSequence, 1)
+                        clientFinReceived = true
+                        acceptedFin = true
+                    }
+                    shouldAck = true
+                }
+            }
+
+            payloadToForward?.let(::forwardClientPayload)
+            if (acceptedFin) {
+                shutdownRemoteOutput()
+            }
+            if (shouldAck) {
+                sendAckToClient()
+            }
+        }
+
+        override fun close() {
+            if (closed.compareAndSet(false, true)) {
+                try {
+                    socket.close()
+                } catch (_: IOException) {
+                }
+                connectorThread?.interrupt()
+                receiverThread?.interrupt()
+                onClosed(this)
+            }
+        }
+
+        private fun connectLoop() {
+            try {
+                socket.connect(
+                    InetSocketAddress(key.destinationAddress, key.destinationPort),
+                    TCP_CONNECT_TIMEOUT_MS,
+                )
+                val output = socket.getOutputStream()
+                synchronized(stateLock) {
+                    remoteOutput = output
+                    while (pendingPayloads.isNotEmpty()) {
+                        output.write(pendingPayloads.removeFirst())
+                    }
+                    output.flush()
+                    if (clientFinReceived) {
+                        socket.shutdownOutput()
+                    }
+                }
+
+                receiverThread = Thread(::receiveLoop, "QNZapret-TCP-recv-${key.destinationPort}").apply {
+                    isDaemon = true
+                    start()
+                }
+            } catch (_: IOException) {
+                sendResetToClient()
+                close()
+            }
+        }
+
+        private fun receiveLoop() {
+            val input = try {
+                socket.getInputStream()
+            } catch (_: IOException) {
+                sendResetToClient()
+                close()
+                return
+            }
+            val buffer = ByteArray(maxTcpPayloadSize())
+            var gracefulFinSent = false
+
+            try {
+                while (isRunning() && !closed.get()) {
+                    val read = try {
+                        input.read(buffer)
+                    } catch (_: SocketTimeoutException) {
+                        continue
+                    }
+                    if (read < 0) {
+                        break
+                    }
+                    if (read == 0) {
+                        continue
+                    }
+
+                    sendPayloadToClient(buffer.copyOfRange(0, read))
+                }
+                gracefulFinSent = sendFinToClient()
+            } catch (_: IOException) {
+                sendResetToClient()
+            } finally {
+                if (gracefulFinSent) {
+                    sleepBeforeClosing()
+                }
+                close()
+            }
+        }
+
+        private fun forwardClientPayload(payload: ByteArray) {
+            val chunks = transformClientPayload(payload)
+            if (chunks.isEmpty()) {
+                return
+            }
+
+            try {
+                synchronized(stateLock) {
+                    val output = remoteOutput
+                    if (output == null) {
+                        chunks.forEach { pendingPayloads.addLast(it) }
+                    } else {
+                        chunks.forEach(output::write)
+                        output.flush()
+                    }
+                }
+            } catch (_: IOException) {
+                sendResetToClient()
+                close()
+            }
+        }
+
+        private fun transformClientPayload(payload: ByteArray): List<ByteArray> {
+            if (payload.isEmpty()) {
+                return emptyList()
+            }
+
+            if (strategyEvaluated) {
+                return listOf(payload)
+            }
+            strategyEvaluated = true
+
+            val decision = localProxy.evaluate(
+                StrategyFlowProbe(
+                    transport = StrategyTransport.TCP,
+                    destinationPort = key.destinationPort,
+                    payload = payload,
+                ),
+            )
+            if (decision.kind != StrategyDecisionKind.DESYNC) {
+                return listOf(payload)
+            }
+
+            var chunks = listOf(payload)
+            decision.actions.forEach { action ->
+                if (action.kind == StrategyActionKind.SPLIT) {
+                    chunks = splitChunks(chunks, action.position ?: DEFAULT_TCP_SPLIT_POSITION)
+                }
+            }
+            return chunks
+        }
+
+        private fun splitChunks(chunks: List<ByteArray>, position: Int): List<ByteArray> {
+            if (position <= 0) {
+                return chunks
+            }
+
+            return chunks.flatMap { chunk ->
+                if (position >= chunk.size) {
+                    listOf(chunk)
+                } else {
+                    listOf(
+                        chunk.copyOfRange(0, position),
+                        chunk.copyOfRange(position, chunk.size),
+                    )
+                }
+            }
+        }
+
+        private fun shutdownRemoteOutput() {
+            try {
+                val shouldShutdown = synchronized(stateLock) {
+                    remoteOutput != null
+                }
+                if (shouldShutdown) {
+                    socket.shutdownOutput()
+                }
+            } catch (_: IOException) {
+                sendResetToClient()
+                close()
+            }
+        }
+
+        private fun sendPayloadToClient(payload: ByteArray) {
+            var offset = 0
+            while (offset < payload.size && isRunning() && !closed.get()) {
+                val chunkSize = minOf(maxTcpPayloadSize(), payload.size - offset)
+                val chunk = payload.copyOfRange(offset, offset + chunkSize)
+                val response = synchronized(stateLock) {
+                    val sequenceNumber = serverNextSequence
+                    serverNextSequence = addSequence(serverNextSequence, chunk.size)
+                    buildTcpResponsePacket(
+                        sequenceNumber = sequenceNumber,
+                        acknowledgementNumber = clientNextSequence,
+                        flags = TcpFlags.ACK or TcpFlags.PSH,
+                        payload = chunk,
+                    )
+                }
+                packetWriter(response)
+                offset += chunkSize
+            }
+        }
+
+        private fun sendSynAck() {
+            val response = synchronized(stateLock) {
+                buildTcpResponsePacket(
+                    sequenceNumber = serverInitialSequence,
+                    acknowledgementNumber = clientNextSequence,
+                    flags = TcpFlags.SYN or TcpFlags.ACK,
+                )
+            }
+            packetWriter(response)
+        }
+
+        private fun sendAckToClient() {
+            val response = synchronized(stateLock) {
+                buildTcpResponsePacket(
+                    sequenceNumber = serverNextSequence,
+                    acknowledgementNumber = clientNextSequence,
+                    flags = TcpFlags.ACK,
+                )
+            }
+            packetWriter(response)
+        }
+
+        private fun sendFinToClient(): Boolean {
+            val response = synchronized(stateLock) {
+                if (finSentToClient) {
+                    null
+                } else {
+                    finSentToClient = true
+                    val sequenceNumber = serverNextSequence
+                    serverNextSequence = addSequence(serverNextSequence, 1)
+                    buildTcpResponsePacket(
+                        sequenceNumber = sequenceNumber,
+                        acknowledgementNumber = clientNextSequence,
+                        flags = TcpFlags.FIN or TcpFlags.ACK,
+                    )
+                }
+            }
+            response?.let(packetWriter)
+            return response != null
+        }
+
+        private fun sendResetToClient() {
+            if (closed.get()) {
+                return
+            }
+
+            val response = synchronized(stateLock) {
+                buildTcpResponsePacket(
+                    sequenceNumber = serverNextSequence,
+                    acknowledgementNumber = clientNextSequence,
+                    flags = TcpFlags.RST or TcpFlags.ACK,
+                )
+            }
+            packetWriter(response)
+        }
+
+        private fun buildTcpResponsePacket(
+            sequenceNumber: Int,
+            acknowledgementNumber: Int,
+            flags: Int,
+            payload: ByteArray = ByteArray(0),
+        ): ByteArray {
+            return IpPacketCodec.buildTcpPacket(
+                ipVersion = key.ipVersion,
+                sourceAddress = key.destinationAddress,
+                destinationAddress = key.sourceAddress,
+                sourcePort = key.destinationPort,
+                destinationPort = key.sourcePort,
+                sequenceNumber = sequenceNumber,
+                acknowledgementNumber = acknowledgementNumber,
+                flags = flags,
+                windowSize = DEFAULT_TCP_WINDOW_SIZE,
+                payload = payload,
+            )
+        }
+
+        private fun sleepBeforeClosing() {
+            try {
+                Thread.sleep(TCP_FIN_GRACE_MS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+
+        private fun maxTcpPayloadSize(): Int {
+            val ipHeaderLength = if (key.ipVersion == IpVersion.IPV4) IPV4_HEADER_LENGTH else IPV6_HEADER_LENGTH
+            return (mtu - ipHeaderLength - TCP_HEADER_LENGTH).coerceIn(
+                MIN_TCP_PAYLOAD_SIZE,
+                MAX_TCP_PAYLOAD_SIZE,
+            )
         }
     }
 
@@ -261,11 +733,40 @@ internal class TunPacketForwarder(
             ipv6PacketCodecReady = true,
             ipv4UdpForwarderReady = true,
             ipv6UdpForwarderReady = true,
-            tcpForwarderReady = false,
+            tcpForwarderReady = true,
         )
+
+        private fun TcpSegment.sequenceLength(): Int {
+            return payload.size +
+                (if (hasSyn) 1 else 0) +
+                (if (hasFin) 1 else 0)
+        }
+
+        private fun addSequence(sequenceNumber: Int, delta: Int): Int {
+            return sequenceNumber + delta
+        }
+
+        private fun initialServerSequence(key: TcpFlowKey, segment: TcpSegment): Int {
+            var seed = 17
+            seed = 31 * seed + key.sourceAddress.hashCode()
+            seed = 31 * seed + key.sourcePort
+            seed = 31 * seed + key.destinationAddress.hashCode()
+            seed = 31 * seed + key.destinationPort
+            seed = 31 * seed + segment.sequenceNumber
+            return seed
+        }
 
         private const val DEFAULT_PACKET_BUFFER_SIZE = 16_384
         private const val MAX_UDP_PACKET_SIZE = 65_507
+        private const val TCP_CONNECT_TIMEOUT_MS = 10_000
+        private const val TCP_FIN_GRACE_MS = 1_000L
         private const val SOCKET_TIMEOUT_MS = 1_000
+        private const val IPV4_HEADER_LENGTH = 20
+        private const val IPV6_HEADER_LENGTH = 40
+        private const val TCP_HEADER_LENGTH = 20
+        private const val MIN_TCP_PAYLOAD_SIZE = 512
+        private const val MAX_TCP_PAYLOAD_SIZE = 8_192
+        private const val DEFAULT_TCP_WINDOW_SIZE = 65_535
+        private const val DEFAULT_TCP_SPLIT_POSITION = 1
     }
 }

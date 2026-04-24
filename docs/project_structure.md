@@ -171,9 +171,9 @@ test/
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimeEngine.kt`
   Принимает flow probe и возвращает direct/desync decision по strategy profile, hostlists и payload assets.
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
-  Парсит IPv4/IPv6 UDP packets из TUN и собирает IPv4/IPv6 UDP response packets для записи обратно в TUN.
+  Парсит IPv4/IPv6 UDP packets и TCP segments из TUN, собирает IPv4/IPv6 UDP/TCP response packets для записи обратно в TUN.
 - `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
-  Userspace forwarder core: читает TUN packets, умеет IPv4/IPv6 UDP relay через Android protected `DatagramSocket` и вызывает strategy engine перед отправкой datagram.
+  Userspace forwarder core: читает TUN packets, умеет IPv4/IPv6 UDP relay через Android protected `DatagramSocket`, TCP relay/state machine через protected `Socket`, вызывает strategy engine перед отправкой UDP datagram и первого TCP payload chunk.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
   Компилятор профиля в компактный runtime plan.
   План сохраняет `unmatchedTrafficPolicy`, чтобы future forwarder знал, что потоки вне hostlists нужно вести direct forwarding без desync-действий.
@@ -182,7 +182,7 @@ test/
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
   Lifecycle локального strategy proxy и держатель native strategy engine.
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
-  Lifecycle TUN transport guard. Сейчас не вызывает `establish()`, пока не готов полный TCP/UDP userspace forwarder; future TUN builder уже описывает IPv4 и IPv6 адреса/routes/DNS.
+  Lifecycle TUN transport. При `establishTunnel=false` оставляет default-route выключенным и сообщает capability flags; при `establishTunnel=true` поднимает IPv4/IPv6 TUN routes/DNS и запускает forwarder только когда TCP/UDP capabilities готовы.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
   In-memory snapshot store для Android runtime-состояния.
 

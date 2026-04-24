@@ -159,8 +159,8 @@ Wire payload:
 ```
 
 Текущий Android service читает эти значения, парсит `strategyProfile`, компилирует его в `StrategyRuntimePlan`, проверяет assets и поднимает local strategy proxy с native strategy engine.
-По умолчанию `establishTunnel` равен `false`, чтобы приложение не перехватывало весь трафик до подключения userspace forwarder.
-Если `establishTunnel` сейчас принудительно передать как `true`, Android layer все равно не вызывает `VpnService.Builder.establish()`, пока TCP relay не готов.
+По умолчанию `establishTunnel` равен `false`, чтобы приложение не перехватывало весь трафик без явного включения TUN default-route.
+Если `establishTunnel` передать как `true`, Android layer вызывает `VpnService.Builder.establish()` только когда TCP/UDP forwarder capabilities готовы.
 
 ### `StrategyProfile`
 
@@ -221,14 +221,21 @@ Userspace forwarding foundation сейчас умеет:
 - синтезировать IPv4/IPv6 UDP response packets и писать их обратно в TUN output
 - вызывать `StrategyRuntimeEngine.evaluate()` перед отправкой UDP datagram
 - отправлять `udpFake` payload repeats перед реальным datagram, если decision уже содержит такую action
+- выделять TCP segments и flow tuple
+- отвечать на TCP SYN из TUN через synthetic SYN/ACK, вести client/server sequence numbers, ACK, FIN и RST
+- открывать protected `Socket`, чтобы исходящий IPv4/IPv6 TCP stream не возвращался обратно в VPN
+- прокидывать TCP payload между TUN flow и protected socket, синтезируя TCP response packets обратно в TUN output
+- вызывать `StrategyRuntimeEngine.evaluate()` на первом TCP payload chunk
+- применять TCP `split` как best-effort stream write split; TCP `fake` в no-root socket mode намеренно не отправляется в реальный socket
 
 Ограничения текущего foundation:
 
-- TCP relay/state machine еще не реализован
-- TUN default-route не включается, даже если `establishTunnel=true`, пока `tcpForwarderReady=false`
+- TCP relay/state machine является foundation-реализацией без полноценного retransmit, congestion control, backpressure и долгого idle cleanup
+- TUN default-route не включается по умолчанию, потому что `ProxyLaunchConfig.defaultAndroidStrategy.establishTunnel=false`; при явном `establishTunnel=true` он включается только если TCP/UDP capabilities готовы
 - IPv6 extension headers пока не разворачиваются, foundation обрабатывает прямой IPv6 UDP/TCP `nextHeader`
 - QUIC host detection пока не связывает QUIC Initial с доменом без внешней DNS/SNI correlation, поэтому hostlist-based `udpFake` обычно не сработает сам по себе
 - TCP `fake` поверх обычного protected socket не считается безопасным no-root действием, потому что без raw fooling пакет увидит настоящий сервер
+- TCP `split` через обычный socket является best-effort: отдельные `OutputStream.write()` не гарантируют сохранение TCP packet boundaries на всех сетевых стеках
 
 Важно: эта модель намеренно описывает proxy/stream-oriented no-root subset.
 Она не обещает полную семантику `nfqws2`, raw TCP sequence tricks, TCP timestamp fooling (`ts`), TTL tricks или IP fragmentation.
@@ -274,7 +281,7 @@ Wire payload:
   'udpForwarderReady': true,
   'ipv6PacketCodecReady': true,
   'ipv6UdpForwarderReady': true,
-  'tcpForwarderReady': false,
+  'tcpForwarderReady': true,
   'activeProfileName': 'Default lightweight',
 }
 ```
@@ -285,13 +292,13 @@ Wire payload:
 - `vpnPermissionGranted` актуально для Android.
 - `serviceActive` отражает активность Android foreground service.
 - `strategyEngineReady` означает, что native strategy engine создан, payload blobs загружены, а hostlists зарегистрированы для lazy matching.
-- `trafficForwarderReady` означает, что TUN fd связан с полным TCP/UDP userspace forwarding layer. Сейчас на Android остается `false`.
-- `tunnelActive` означает, что Android TUN fd реально установлен. Сейчас guard держит его `false`, пока TCP relay не готов.
-- `packetCodecReady` означает, что Android runtime умеет парсить IPv4/IPv6 UDP packets и собирать UDP response packets.
+- `trafficForwarderReady` означает, что TUN fd связан с полным TCP/UDP userspace forwarding layer. При `establishTunnel=false` остается `false`, даже если capability flags готовы.
+- `tunnelActive` означает, что Android TUN fd реально установлен. При `establishTunnel=false` остается `false`; при `establishTunnel=true` становится `true`, если Android вернул TUN fd.
+- `packetCodecReady` означает, что Android runtime умеет парсить IPv4/IPv6 UDP packets/TCP segments и собирать UDP/TCP response packets.
 - `udpForwarderReady` означает, что UDP relay core готов использовать protected `DatagramSocket` и писать ответы обратно в TUN.
-- `ipv6PacketCodecReady` означает, что IPv6 packet parsing/UDP response builder включены в foundation.
+- `ipv6PacketCodecReady` означает, что IPv6 packet parsing и UDP/TCP response builders включены в foundation.
 - `ipv6UdpForwarderReady` означает, что UDP relay core умеет работать с IPv6 destination/source addresses.
-- `tcpForwarderReady` означает готовность TCP userspace relay/state machine. Сейчас на Android остается `false`.
+- `tcpForwarderReady` означает готовность TCP userspace relay/state machine.
 - `activeProfileName` дает UI человекочитаемое имя профиля, если runtime активен.
 - `message` должен быть пригоден для отображения в UI.
 
@@ -367,7 +374,7 @@ Android behavior:
 - запускает `QnzapretVpnService` как foreground service
 - service парсит strategy profile, компилирует runtime plan, проверяет assets и поднимает local strategy proxy с native strategy engine
 - service проверяет наличие hostlists и payload blobs в Android assets
-- service сообщает capabilities packet codec, UDP relay и TCP relay через snapshot
+- service сообщает capabilities packet codec, UDP relay и TCP relay через snapshot; `trafficForwarderReady` становится `true` только когда TUN fd реально связан с forwarder
 - service переводит store в `running`, если strategy engine успешно поднят
 - если foreground service не удалось запустить, bridge возвращает `vpn_start_failed` и store получает `failed`
 - если runtime внутри service упал при старте, service переводит store в `failed` и останавливается
@@ -440,7 +447,7 @@ Native return values:
 3. Если permission есть, store получает `starting`.
 4. Foreground `QnzapretVpnService` стартует.
 5. Service получает config, компилирует strategy profile и проверяет Android assets.
-6. Service стартует local strategy proxy, загружает strategy engine и удерживает TUN выключенным до готовности TCP relay.
+6. Service стартует local strategy proxy, загружает strategy engine и поднимает TUN только при `establishTunnel=true` и готовых TCP/UDP forwarder capabilities.
 7. Runtime message отражает `unmatchedTrafficPolicy`, чтобы было видно, что трафик вне hostlists не должен попадать под desync.
 8. Service переводит store в `running`.
 9. `getSnapshot()` возвращает актуальное состояние.
