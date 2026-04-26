@@ -9,12 +9,20 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.net.VpnService
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class QnzapretVpnService : VpnService() {
     private var runtime: QnzapretAndroidRuntime? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            Log.d(LOG_TAG, "stop action received")
+            stopRuntime("Сервис обхода остановлен. Система готова к следующему запуску.")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         if (VpnService.prepare(this) != null) {
             QnzapretVpnRuntimeStore.markFailed(
                 "Нет VPN-разрешения. Перед запуском нужно подготовить сервис.",
@@ -31,6 +39,10 @@ class QnzapretVpnService : VpnService() {
         val startResult = try {
             QnzapretAndroidRuntime(this).also { runtime = it }.start(config)
         } catch (error: Exception) {
+            Log.d(
+                LOG_TAG,
+                "runtime start failed ${error.javaClass.simpleName}:${error.message ?: "-"}",
+            )
             runtime?.stop()
             runtime = null
             QnzapretVpnRuntimeStore.markFailed(
@@ -95,24 +107,20 @@ class QnzapretVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        runtime?.stop()
-        runtime = null
-        QnzapretVpnRuntimeStore.markIdle(
-            this,
-            "Сервис обхода остановлен. Система готова к следующему запуску.",
-        )
+        stopRuntime("Сервис обхода остановлен. Система готова к следующему запуску.")
         super.onDestroy()
     }
 
     override fun onRevoke() {
-        runtime?.stop()
-        runtime = null
-        QnzapretVpnRuntimeStore.markIdle(
-            this,
-            "Система отозвала VPN-разрешение. Перед новым запуском нужно разрешить VPN снова.",
-        )
+        stopRuntime("Система отозвала VPN-разрешение. Перед новым запуском нужно разрешить VPN снова.")
         stopSelf()
         super.onRevoke()
+    }
+
+    private fun stopRuntime(message: String) {
+        runtime?.stop()
+        runtime = null
+        QnzapretVpnRuntimeStore.markIdle(this, message)
     }
 
     private fun ensureNotificationChannel() {
@@ -146,6 +154,12 @@ class QnzapretVpnService : VpnService() {
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
         }
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            createStopIntent(this),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
@@ -154,6 +168,7 @@ class QnzapretVpnService : VpnService() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)
+            .addAction(0, "Остановить", stopIntent)
             .build()
     }
 
@@ -183,7 +198,7 @@ class QnzapretVpnService : VpnService() {
             strategyProfile = StrategyProfileCodec.fromJson(
                 intent.getStringExtra(EXTRA_STRATEGY_PROFILE),
             ),
-            establishTunnel = intent.getBooleanExtra(EXTRA_ESTABLISH_TUNNEL, false),
+            establishTunnel = intent.getBooleanExtra(EXTRA_ESTABLISH_TUNNEL, true),
             tunnelMtu = intent.getIntExtra(EXTRA_TUNNEL_MTU, 8500),
         )
     }
@@ -199,6 +214,8 @@ class QnzapretVpnService : VpnService() {
         private const val EXTRA_STRATEGY_PROFILE = "extra_strategy_profile"
         private const val EXTRA_ESTABLISH_TUNNEL = "extra_establish_tunnel"
         private const val EXTRA_TUNNEL_MTU = "extra_tunnel_mtu"
+        private const val ACTION_STOP = "dev.qnzapret.action.STOP_VPN_RUNTIME"
+        private const val LOG_TAG = "QNZapretService"
 
         internal fun createStartIntent(context: Context, config: VpnRuntimeConfig): Intent {
             return Intent(context, QnzapretVpnService::class.java).apply {
@@ -213,6 +230,12 @@ class QnzapretVpnService : VpnService() {
                 )
                 putExtra(EXTRA_ESTABLISH_TUNNEL, config.establishTunnel)
                 putExtra(EXTRA_TUNNEL_MTU, config.tunnelMtu)
+            }
+        }
+
+        internal fun createStopIntent(context: Context): Intent {
+            return Intent(context, QnzapretVpnService::class.java).apply {
+                action = ACTION_STOP
             }
         }
     }

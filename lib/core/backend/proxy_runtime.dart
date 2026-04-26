@@ -30,7 +30,7 @@ class ProxyLaunchConfig {
     required this.cloudflareEnabled,
     required this.secret,
     this.strategyProfile = StrategyProfile.defaultLightweight,
-    this.establishTunnel = false,
+    this.establishTunnel = true,
     this.tunnelMtu = 8500,
   });
 
@@ -153,15 +153,12 @@ class StrategyProfile {
         ],
       ),
       StrategyRule(
-        id: 'quic-hostlist-fake',
+        id: 'quic-initial-fake',
         name: 'QUIC Initial fake',
         tcpPorts: [],
         udpPorts: [443],
         protocols: [StrategyProtocol.quic],
-        hostlists: [
-          'qnzapret/lists/list-google.txt',
-          'qnzapret/lists/list-user.txt',
-        ],
+        hostlists: [],
         actions: [
           StrategyAction(
             kind: StrategyActionKind.udpFake,

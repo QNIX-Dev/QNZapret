@@ -8,7 +8,7 @@ import org.junit.Test
 
 class StrategyRuntimeEngineTest {
     @Test
-    fun quicInitialWithoutKnownHostStaysDirect() {
+    fun quicInitialWithoutKnownHostAppliesUdpFake() {
         val decision = engine().evaluate(
             StrategyFlowProbe(
                 transport = StrategyTransport.UDP,
@@ -17,10 +17,11 @@ class StrategyRuntimeEngineTest {
             ),
         )
 
-        assertEquals(StrategyDecisionKind.DIRECT, decision.kind)
+        assertEquals(StrategyDecisionKind.DESYNC, decision.kind)
         assertEquals(StrategyProtocol.QUIC, decision.protocol)
         assertNull(decision.host)
-        assertEquals("host_not_detected", decision.reason)
+        assertEquals("quic-initial-fake", decision.ruleId)
+        assertEquals(StrategyActionKind.UDP_FAKE, decision.actions.single().kind)
     }
 
     @Test
@@ -37,7 +38,7 @@ class StrategyRuntimeEngineTest {
         assertEquals(StrategyDecisionKind.DESYNC, decision.kind)
         assertEquals(StrategyProtocol.QUIC, decision.protocol)
         assertEquals("www.google.com", decision.host)
-        assertEquals("quic-hostlist-fake", decision.ruleId)
+        assertEquals("quic-initial-fake", decision.ruleId)
         assertEquals(1, decision.actions.size)
         assertEquals(StrategyActionKind.UDP_FAKE, decision.actions.single().kind)
         assertNotNull(decision.actions.single().blobPayload)

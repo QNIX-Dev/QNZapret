@@ -1,6 +1,6 @@
 package dev.qnzapret
 
-import android.content.Context
+import android.net.VpnService
 
 internal data class LocalStrategyProxyEndpoint(
     val host: String,
@@ -33,10 +33,11 @@ internal data class LocalStrategyProxyStartResult(
 )
 
 internal class LocalStrategyProxy(
-    private val context: Context,
+    private val service: VpnService,
 ) {
     private var endpoint: LocalStrategyProxyEndpoint? = null
     private var engine: StrategyRuntimeEngine? = null
+    private var server: StrategySocks5Server? = null
     private var status: LocalStrategyProxyStatus = LocalStrategyProxyStatus.stopped()
 
     val isRunning: Boolean
@@ -47,12 +48,16 @@ internal class LocalStrategyProxy(
 
     fun start(config: VpnRuntimeConfig, plan: StrategyRuntimePlan): LocalStrategyProxyStartResult {
         val proxyPort = if (config.localPort > 0) config.localPort else DEFAULT_PROXY_PORT
-        val nextEndpoint = LocalStrategyProxyEndpoint(
-            host = config.localHost.ifBlank { DEFAULT_PROXY_HOST },
-            port = proxyPort,
-        )
-        val assetBundle = StrategyAssetStore.load(context, config.strategyProfile)
+        val proxyHost = config.localHost.ifBlank { DEFAULT_PROXY_HOST }
+        val assetBundle = StrategyAssetStore.load(service, config.strategyProfile)
         val nextEngine = StrategyRuntimeEngine(config.strategyProfile, assetBundle)
+        val nextServer = StrategySocks5Server(
+            service = service,
+            host = proxyHost,
+            port = proxyPort,
+            engine = nextEngine,
+        )
+        val nextEndpoint = nextServer.start()
         val nextStatus = LocalStrategyProxyStatus(
             engineReady = true,
             hostlistCount = nextEngine.summary.hostlistCount,
@@ -63,6 +68,7 @@ internal class LocalStrategyProxy(
 
         endpoint = nextEndpoint
         engine = nextEngine
+        server = nextServer
         status = nextStatus
         return LocalStrategyProxyStartResult(
             endpoint = nextEndpoint,
@@ -79,6 +85,8 @@ internal class LocalStrategyProxy(
     }
 
     fun stop() {
+        server?.stop()
+        server = null
         endpoint = null
         engine = null
         status = LocalStrategyProxyStatus.stopped()

@@ -23,11 +23,18 @@
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimeEngine.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategySocks5Server.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/TProxyService.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/UnderlyingNetworkSelector.kt`
+
+Связанные handoff-документы:
+
+- `docs/android_runtime_handoff.md`
+- `docs/android_uid_network_blocker.md`
 
 Если код и документ расходятся, источником правды считается код.
 При любом существенном изменении контракта нужно обновлять и код, и этот документ в одном наборе изменений.
@@ -101,7 +108,7 @@ enum ProxyRuntimeState { idle, starting, running, stopping, failed }
 - `failed` - операция runtime завершилась ошибкой или runtime не может продолжать работу
 
 Важно: сейчас `running` на Android означает, что foreground `VpnService` активен и native runtime прошел стартовый lifecycle.
-Это еще не означает, что TUN fd уже связан с production TCP/UDP userspace forwarder и реальным socket proxy.
+Это еще не означает, что TUN fd уже передан в `hev-socks5-tunnel` и связан с реальным локальным SOCKS5 proxy.
 Для этого в snapshot есть отдельный флаг `trafficForwarderReady`.
 
 ## Модели
@@ -156,14 +163,14 @@ Wire payload:
   'cloudflareEnabled': true,
   'secret': 'token',
   'strategyProfile': StrategyProfile.defaultLightweight.toMap(),
-  'establishTunnel': false,
+  'establishTunnel': true,
   'tunnelMtu': 8500,
 }
 ```
 
-Текущий Android service читает эти значения, парсит `strategyProfile`, компилирует его в `StrategyRuntimePlan`, проверяет assets и поднимает local strategy proxy с native strategy engine.
-По умолчанию `establishTunnel` равен `false`, чтобы приложение не перехватывало весь трафик без явного включения TUN default-route.
-Если `establishTunnel` передать как `true`, Android layer вызывает `VpnService.Builder.establish()` только когда TCP/UDP forwarder capabilities готовы.
+Текущий Android service читает эти значения, парсит `strategyProfile`, компилирует его в `StrategyRuntimePlan`, проверяет assets и поднимает local strategy SOCKS5 proxy с native strategy engine.
+По умолчанию `establishTunnel` равен `true`, чтобы Android smoke и обычный запуск поднимали TUN default-route и передавали TUN fd в `hev-socks5-tunnel`, который перенаправляет TCP/UDP в локальный SOCKS5 proxy.
+Если `establishTunnel` явно передать как `false`, Android layer стартует engine/service без `VpnService.Builder.establish()` и не перехватывает трафик.
 
 ### `StrategyProfile`
 
@@ -177,8 +184,8 @@ Wire payload:
 
 - HTTP TCP/80 hostlist rule с `fake(repeats: 1)` и `split(position: 1)`
 - TLS TCP/443 hostlist rule с `fake(blobKey: tls_google)` и `split(position: 1)`
-- QUIC UDP/443 hostlist rule с `udpFake(blobKey: quic_google)`
-- `unmatchedTrafficPolicy: direct` - трафик, который не попал в hostlists, должен проходить обычным direct forwarding без desync actions
+- QUIC UDP/443 rule с `udpFake(blobKey: quic_google)` для всех распознанных QUIC Initial datagrams
+- `unmatchedTrafficPolicy: direct` - TCP-трафик, который не попал в hostlists, должен проходить обычным direct forwarding без desync actions
 
 Дефолтные Android asset paths:
 
@@ -202,8 +209,9 @@ Wire payload:
 
 Семантика hostlists:
 
-- hostlists работают как списки включения desync-обработки, а не как allowlist всего соединения
-- если домен, SNI, HTTP Host или QUIC target не найден в списках, local strategy proxy должен форвардить поток без fake/split/udpFake
+- hostlists работают как списки включения TCP desync-обработки, а не как allowlist всего соединения
+- если домен, SNI или HTTP Host не найден в TCP-списках, local strategy proxy должен форвардить поток без fake/split
+- QUIC Initial в дефолтном профиле намеренно получает `udpFake` без hostlist-зависимости, потому что Android Private DNS/DoT и уже существующий DNS cache часто не дают надежного `knownHost`
 - `direct` означает обычный исходящий путь через Android protected socket, чтобы соединение не возвращалось обратно в VPN
 - отсутствие L7 host target на этапе детекта не должно само по себе блокировать поток; до появления отдельной политики блокировки безопасное поведение - direct forwarding
 
@@ -212,39 +220,33 @@ Native strategy engine сейчас умеет:
 - лениво загружать hostlists из Android assets и матчить exact/suffix домены
 - загружать бинарные payload blobs по ключам `tls_google` и `quic_google`
 - детектить HTTP Host и TLS ClientHello SNI из первого payload chunk
-- распознавать базовый QUIC Initial marker и применять hostlist desync, если `knownHost` пришел из QUIC host correlation
+- распознавать базовый QUIC Initial marker и применять `udpFake` по дефолтному QUIC rule даже без `knownHost`
 - возвращать `DIRECT` для unmatched traffic, missing host и неподдержанного протокола
 - возвращать `DESYNC` с resolved actions и payload bytes для matched HTTP/TLS правил
 
-Userspace forwarding foundation сейчас умеет:
+Local strategy proxy path сейчас умеет:
 
-- парсить IPv4 и IPv6 packets из TUN buffer
-- выделять UDP datagrams и flow tuple
-- открывать protected `DatagramSocket`, чтобы исходящий IPv4/IPv6 UDP не возвращался обратно в VPN
-- синтезировать IPv4/IPv6 UDP response packets и писать их обратно в TUN output
-- вызывать `StrategyRuntimeEngine.evaluate()` перед отправкой UDP datagram
-- отправлять `udpFake` payload repeats перед реальным datagram, если decision уже содержит такую action
+- принимать TCP CONNECT и UDP_ASSOCIATE через SOCKS5 от `hev-socks5-tunnel`
+- открывать protected `Socket`/`DatagramSocket`, чтобы исходящий TCP/UDP не возвращался обратно в VPN
+- использовать validated unrestricted underlying network для TCP/UDP sockets, если Android ее предоставляет
+- вызывать `StrategyRuntimeEngine.evaluate()` на первом TCP payload chunk и на UDP datagram
+- отправлять `udpFake` payload repeats перед реальным UDP datagram, если decision содержит такую action
 - вести best-effort QUIC host correlation: UDP/53 DNS A/AAAA responses и первый TCP HTTP/TLS host hint сохраняют `destination IP -> host`, а UDP/443 QUIC Initial получает этот host как `knownHost` перед вызовом strategy engine
-- выделять TCP segments и flow tuple
-- отвечать на TCP SYN из TUN через synthetic SYN/ACK, вести client/server sequence numbers, ACK, FIN и RST
-- открывать protected `Socket`, чтобы исходящий IPv4/IPv6 TCP stream не возвращался обратно в VPN
-- прокидывать TCP payload между TUN flow и protected socket, синтезируя TCP response packets обратно в TUN output
-- вести TCP client-side state через `TcpRelayState`: принимать in-order payload, игнорировать full duplicate retransmits, форвардить только новый tail при overlapping retransmit, ACK/drop out-of-order payload без продвижения окна и корректно проходить unsigned sequence wrap
-- вызывать `StrategyRuntimeEngine.evaluate()` на первом TCP payload chunk
-- применять TCP `split` как best-effort stream write split; TCP `fake` в no-root socket mode намеренно не отправляется в реальный socket
-- чистить idle UDP/TCP sessions и ограничивать накопленный TCP payload до завершения protected socket connect
+- применять TCP `split` для TLS как no-root-safe TLS record split; для остальных TCP payload использовать best-effort stream write split
+- применять TCP `fake` с resolved blob payload как best-effort: перед реальным TCP payload временно выставлять socket hop limit/TTL 8, отправлять fake payload через protected socket и возвращать дефолтный hop limit; если системная TTL/hop-limit опция недоступна, fake payload не отправляется
+- останавливать `hev-socks5-tunnel`, закрывать TUN fd, временный YAML-config и локальный SOCKS5 proxy при stop/revoke/destroy lifecycle
 
-Ограничения текущего foundation:
+Ограничения текущего path:
 
-- TCP relay/state machine является foundation-реализацией без out-of-order buffering, полноценного retransmit/reassembly, congestion control, write backpressure и расширенной диагностики
-- TUN default-route не включается по умолчанию, потому что `ProxyLaunchConfig.defaultAndroidStrategy.establishTunnel=false`; при явном `establishTunnel=true` он включается только если TCP/UDP capabilities готовы
-- IPv6 extension headers пока не разворачиваются, foundation обрабатывает прямой IPv6 UDP/TCP `nextHeader`
-- QUIC correlation является best-effort: она покрывает обычный UDP/53 DNS path и prior TCP HTTP/TLS host hints, но не видит DoH/DoT, DNS cache misses, pre-existing OS cache до старта VPN и сложные случаи, где QUIC IP отличается от уже связанного host
-- TCP `fake` поверх обычного protected socket не считается безопасным no-root действием, потому что без raw fooling пакет увидит настоящий сервер
-- TCP `split` через обычный socket является best-effort: отдельные `OutputStream.write()` не гарантируют сохранение TCP packet boundaries на всех сетевых стеках
+- TUN default-route включается в дефолтном Android strategy config, потому что `ProxyLaunchConfig.defaultAndroidStrategy.establishTunnel=true`; при явном `establishTunnel=false` runtime стартует без перехвата трафика
+- TUN DNS берется из `LinkProperties` выбранной validated underlying-сети и добавляется в `VpnService.Builder`; hardcoded fallback используется только если системные DNS не удалось получить. Та же underlying-сеть передается в `Builder.setUnderlyingNetworks(...)`.
+- пакет приложения исключается из VPN через `Builder.addDisallowedApplication(...)`; TUN выбирает валидированную unrestricted underlying network с `INTERNET` и без `TRANSPORT_VPN` через `ConnectivityManager`, передает ее в `Builder.setUnderlyingNetworks(...)` и берет DNS из ее `LinkProperties`; Android manifest должен содержать `ACCESS_NETWORK_STATE`, иначе чтение network state/DNS будет запрещено
+- QUIC correlation является best-effort: она покрывает обычный UDP/53 DNS path и prior TCP HTTP/TLS host hints, но не видит DoH/DoT, DNS cache misses, pre-existing OS cache до старта VPN и сложные случаи, где QUIC IP отличается от уже связанного host. Поэтому дефолтный QUIC rule не требует hostlist match.
+- TCP `fake` в no-root режиме остается best-effort socket-level действием: runtime не делает raw sequence/timestamp tricks, а только пробует low-hop-limit отправку blob payload. Если Android или сеть не дают надежно применить TTL/hop-limit, fake пропускается, чтобы не слать полноценный ложный ClientHello на настоящий сервер.
+- TCP stream split через обычный socket остается best-effort: отдельные `OutputStream.write()` не гарантируют сохранение TCP packet boundaries на всех сетевых стеках. Для TLS используется более надежный TLS record split, который меняет границы TLS records без raw TCP tricks.
 
 Важно: эта модель намеренно описывает proxy/stream-oriented no-root subset.
-Она не обещает полную семантику `nfqws2`, raw TCP sequence tricks, TCP timestamp fooling (`ts`), TTL tricks или IP fragmentation.
+Она не обещает полную семантику `nfqws2`, raw TCP sequence tricks, TCP timestamp fooling (`ts`), точный контроль TTL за пределами best-effort socket option или IP fragmentation.
 
 ### `ProxyRuntimeSnapshot`
 
@@ -294,17 +296,17 @@ Wire payload:
 
 Семантика:
 
-- `backendConnected` сейчас означает, что platform bridge base доступен, а не что production userspace forwarder уже полностью обрабатывает трафик.
+- `backendConnected` сейчас означает, что platform bridge base доступен, а не что TUN-to-SOCKS слой уже полностью обрабатывает трафик.
 - `vpnPermissionGranted` актуально для Android.
 - `serviceActive` отражает активность Android foreground service.
 - `strategyEngineReady` означает, что native strategy engine создан, payload blobs загружены, а hostlists зарегистрированы для lazy matching.
-- `trafficForwarderReady` означает, что TUN fd связан с полным TCP/UDP userspace forwarding layer. При `establishTunnel=false` остается `false`, даже если capability flags готовы.
+- `trafficForwarderReady` означает, что TUN fd передан в `hev-socks5-tunnel`, а локальный strategy SOCKS5 proxy готов принимать TCP/UDP. При `establishTunnel=false` остается `false`, даже если capability flags готовы.
 - `tunnelActive` означает, что Android TUN fd реально установлен. При `establishTunnel=false` остается `false`; при `establishTunnel=true` становится `true`, если Android вернул TUN fd.
-- `packetCodecReady` означает, что Android runtime умеет парсить IPv4/IPv6 UDP packets/TCP segments и собирать UDP/TCP response packets.
-- `udpForwarderReady` означает, что UDP relay core готов использовать protected `DatagramSocket` и писать ответы обратно в TUN.
-- `ipv6PacketCodecReady` означает, что IPv6 packet parsing и UDP/TCP response builders включены в foundation.
-- `ipv6UdpForwarderReady` означает, что UDP relay core умеет работать с IPv6 destination/source addresses.
-- `tcpForwarderReady` означает готовность TCP userspace relay/state machine.
+- `packetCodecReady` означает готовность TUN-to-SOCKS слоя принимать IPv4 трафик через `hev-socks5-tunnel`.
+- `udpForwarderReady` означает готовность SOCKS5 UDP_ASSOCIATE и protected UDP relay.
+- `ipv6PacketCodecReady` означает готовность TUN-to-SOCKS слоя принимать IPv6 трафик через `hev-socks5-tunnel`.
+- `ipv6UdpForwarderReady` означает, что UDP relay умеет работать с IPv6 destination/source addresses.
+- `tcpForwarderReady` означает готовность SOCKS5 CONNECT и protected TCP relay.
 - `activeProfileName` дает UI человекочитаемое имя профиля, если runtime активен.
 - `message` должен быть пригоден для отображения в UI. На текущем Android path user-facing сообщения возвращаются на русском; технические имена flags остаются wire protocol.
 
@@ -396,7 +398,7 @@ Android behavior:
 - запускает `QnzapretVpnService` как foreground service
 - service парсит strategy profile, компилирует runtime plan, проверяет assets и поднимает local strategy proxy с native strategy engine
 - service проверяет наличие hostlists и payload blobs в Android assets
-- service сообщает capabilities packet codec, UDP relay и TCP relay через snapshot; `trafficForwarderReady` становится `true` только когда TUN fd реально связан с forwarder
+- service сообщает capabilities `hev-socks5-tunnel` и local SOCKS5 relay через snapshot; `trafficForwarderReady` становится `true` только когда TUN fd реально передан в TUN-to-SOCKS слой
 - service переводит store в `running`, если strategy engine успешно поднят
 - если foreground service не удалось запустить, bridge возвращает `vpn_start_failed` и store получает `failed`
 - если runtime внутри service упал при старте, service переводит store в `failed` и останавливается
@@ -469,7 +471,7 @@ Native return values:
 3. Если permission есть, store получает `starting`.
 4. Foreground `QnzapretVpnService` стартует.
 5. Service получает config, компилирует strategy profile и проверяет Android assets.
-6. Service стартует local strategy proxy, загружает strategy engine и поднимает TUN только при `establishTunnel=true` и готовых TCP/UDP forwarder capabilities.
+6. Service стартует local strategy SOCKS5 proxy, загружает strategy engine и поднимает TUN только при `establishTunnel=true` и готовом `hev-socks5-tunnel`.
 7. Runtime message отражает `unmatchedTrafficPolicy`, чтобы было видно, что трафик вне hostlists не должен попадать под desync.
 8. Service переводит store в `running`.
 9. `getSnapshot()` возвращает актуальное состояние.
@@ -494,7 +496,7 @@ Native return values:
 
 - какие поля `ProxyLaunchConfig` останутся стабильными
 - какие native error codes считаются публичными
-- как отличать "Android service running" от "userspace forwarder fully connected"
+- как отличать "Android service running" от "TUN-to-SOCKS fully connected"
 - как будет устроен log stream
 - нужен ли отдельный health-check или diagnostics snapshot
 - как local strategy proxy будет читать hostlists/payload blobs из Android assets и пользовательского storage

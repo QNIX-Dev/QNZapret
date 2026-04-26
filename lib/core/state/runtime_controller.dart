@@ -283,7 +283,7 @@ class RuntimeController extends Notifier<RuntimeViewState> {
 
   Future<void> stopRuntime() async {
     final controller = _runtimeController;
-    if (controller == null || !state.canStopCommand) {
+    if (controller == null) {
       return;
     }
 

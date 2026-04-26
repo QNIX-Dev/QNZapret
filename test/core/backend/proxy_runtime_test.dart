@@ -18,7 +18,7 @@ void main() {
       'cloudflareEnabled': true,
       'secret': 'token',
       'strategyProfile': StrategyProfile.defaultLightweight.toMap(),
-      'establishTunnel': false,
+      'establishTunnel': true,
       'tunnelMtu': 8500,
     });
   });
@@ -40,6 +40,7 @@ void main() {
       StrategyActionKind.split,
     ]);
     expect(profile.rules[2].udpPorts, [443]);
+    expect(profile.rules[2].hostlists, isEmpty);
   });
 
   test('strategy profile roundtrips through platform map', () {

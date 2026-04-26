@@ -7,6 +7,6 @@ internal data class VpnRuntimeConfig(
     val cloudflareEnabled: Boolean = false,
     val secret: String = "",
     val strategyProfile: StrategyProfile = StrategyProfileCodec.defaultLightweight(),
-    val establishTunnel: Boolean = false,
+    val establishTunnel: Boolean = true,
     val tunnelMtu: Int = 8500,
 )
