@@ -14,7 +14,7 @@ internal class QnzapretAndroidRuntime(
     private val service: VpnService,
 ) {
     private val localProxy = LocalStrategyProxy(service)
-    private val tunTransport = TunTransport(service, localProxy)
+    private val tunTransport = TunTransport(service)
 
     fun start(config: VpnRuntimeConfig): AndroidRuntimeStartResult {
         val plan = StrategyProfileCompiler.compile(config.strategyProfile)
@@ -25,8 +25,18 @@ internal class QnzapretAndroidRuntime(
             )
         }
 
-        val proxyStartResult = localProxy.start(config, plan)
-        val tunState = tunTransport.start(config, proxyStartResult.endpoint)
+        val proxyStartResult = try {
+            localProxy.start(config, plan)
+        } catch (error: Exception) {
+            stop()
+            throw error
+        }
+        val tunState = try {
+            tunTransport.start(config, proxyStartResult.endpoint)
+        } catch (error: Exception) {
+            stop()
+            throw error
+        }
 
         return AndroidRuntimeStartResult(
             plan = plan,

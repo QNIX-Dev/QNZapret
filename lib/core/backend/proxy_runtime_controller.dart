@@ -117,7 +117,7 @@ final class ProxyRuntimeController extends ChangeNotifier {
 
     final result = await _capture(() async {
       await runtime.start(_launchConfig);
-      await _refreshSnapshot();
+      await _refreshSnapshotUntilSettled();
       return true;
     });
     return result ?? false;
@@ -126,7 +126,7 @@ final class ProxyRuntimeController extends ChangeNotifier {
   Future<bool> stop() async {
     final result = await _capture(() async {
       await runtime.stop();
-      await _refreshSnapshot();
+      await _refreshSnapshotUntilSettled();
       return true;
     });
     return result ?? false;
@@ -134,6 +134,19 @@ final class ProxyRuntimeController extends ChangeNotifier {
 
   Future<void> _refreshSnapshot() async {
     _snapshot = await runtime.getSnapshot();
+  }
+
+  Future<void> _refreshSnapshotUntilSettled() async {
+    await _refreshSnapshot();
+
+    for (var attempt = 0; attempt < _transitionPollAttempts; attempt += 1) {
+      if (!_snapshot.state.isTransitioning) {
+        return;
+      }
+
+      await Future<void>.delayed(_transitionPollDelay);
+      await _refreshSnapshot();
+    }
   }
 
   Future<T?> _capture<T>(Future<T> Function() action) async {
@@ -171,5 +184,15 @@ final class ProxyRuntimeController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     super.dispose();
+  }
+
+  static const _transitionPollAttempts = 30;
+  static const _transitionPollDelay = Duration(milliseconds: 200);
+}
+
+extension on ProxyRuntimeState {
+  bool get isTransitioning {
+    return this == ProxyRuntimeState.starting ||
+        this == ProxyRuntimeState.stopping;
   }
 }

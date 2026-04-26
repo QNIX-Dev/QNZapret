@@ -128,15 +128,12 @@ internal object StrategyProfileCodec {
                     ),
                 ),
                 StrategyRule(
-                    id = "quic-hostlist-fake",
+                    id = "quic-initial-fake",
                     name = "QUIC Initial fake",
                     tcpPorts = emptyList(),
                     udpPorts = listOf(443),
                     protocols = listOf(StrategyProtocol.QUIC),
-                    hostlists = listOf(
-                        "qnzapret/lists/list-google.txt",
-                        "qnzapret/lists/list-user.txt",
-                    ),
+                    hostlists = emptyList(),
                     actions = listOf(
                         StrategyAction(
                             kind = StrategyActionKind.UDP_FAKE,

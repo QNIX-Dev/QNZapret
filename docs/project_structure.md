@@ -8,6 +8,14 @@
 ## Общая карта
 
 ```text
+docs/
+  android_runtime_handoff.md
+  android_uid_network_blocker.md
+  integration_workflow.md
+  project_brief.md
+  project_structure.md
+  runtime_bridge_contract.md
+
 lib/
   main.dart
   app/
@@ -79,6 +87,10 @@ android/
         payloads/
           quic_initial_www_google_com.bin
           tls_clienthello_www_google_com.bin
+      jni/
+        Android.mk
+        Application.mk
+        hev-socks5-tunnel/
       kotlin/dev/qnzapret/
         HostlistMatcher.kt
         IpPacketCodec.kt
@@ -95,9 +107,12 @@ android/
         StrategyProfile.kt
         StrategyRuntimeEngine.kt
         StrategyRuntimePlan.kt
+        StrategySocks5Server.kt
         TcpRelayState.kt
-        TunPacketForwarder.kt
+        TProxyService.kt
+        TlsRecordSplitTransform.kt
         TunTransport.kt
+        UnderlyingNetworkSelector.kt
         VpnRuntimeConfig.kt
     src/test/
       kotlin/dev/qnzapret/
@@ -105,6 +120,7 @@ android/
         QuicHostCorrelationTest.kt
         StrategyRuntimeEngineTest.kt
         TcpRelayStateTest.kt
+        TlsRecordSplitTransformTest.kt
 
 linux/
   runner/resources/app_icon.png
@@ -311,9 +327,11 @@ Android launcher icons, Windows icon и Linux window icon должны гене�
 Файлы приложения:
 
 - `android/app/src/main/AndroidManifest.xml`
-  Разрешения, activity, VPN service declaration и foreground service metadata.
+  Разрешения, activity, VPN service declaration и foreground service metadata. Для Android runtime важны `INTERNET`, `ACCESS_NETWORK_STATE`, foreground service permissions и `BIND_VPN_SERVICE` на service.
 - `android/app/src/main/assets/qnzapret/`
   APK-bundled assets для Android runtime: hostlists и binary payloads дефолтной lightweight стратегии.
+- `android/app/src/main/jni/`
+  Native-сборка `hev-socks5-tunnel` через Android NDK. Этот MIT-компонент получает TUN fd и перенаправляет TCP/UDP в локальный SOCKS5 proxy.
 - `android/app/src/main/kotlin/dev/qnzapret/MainActivity.kt`
   Регистрирует `ProxyRuntimeBridge` и прокидывает `onActivityResult` для VPN prepare flow.
 - `android/app/src/main/kotlin/dev/qnzapret/ProxyRuntimeBridge.kt`
@@ -339,17 +357,23 @@ Android launcher icons, Windows icon и Linux window icon должны гене�
   Парсит IPv4/IPv6 UDP packets и TCP segments из TUN, собирает IPv4/IPv6 UDP/TCP response packets для записи обратно в TUN.
 - `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
   Изолированная TCP client-side state machine для sequence accounting, duplicate/overlap retransmit handling, out-of-order ACK/drop и FIN progression.
-- `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
-  Userspace forwarder core: читает TUN packets, умеет IPv4/IPv6 UDP relay через Android protected `DatagramSocket`, TCP relay/state machine через protected `Socket`, вызывает strategy engine перед отправкой UDP datagram и первого TCP payload chunk, чистит idle UDP/TCP sessions и ограничивает pending TCP payload до socket connect.
+- `android/app/src/main/kotlin/dev/qnzapret/TlsRecordSplitTransform.kt`
+  No-root-safe transform для TLS ClientHello: разбивает первый TLS handshake record на два TLS records без raw TCP tricks.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
   Компилятор профиля в компактный runtime plan.
-  План сохраняет `unmatchedTrafficPolicy`, чтобы future forwarder знал, что потоки вне hostlists нужно вести direct forwarding без desync-действий.
+  План сохраняет `unmatchedTrafficPolicy`, чтобы local strategy proxy знал, что потоки вне hostlists нужно вести direct forwarding без desync-действий.
+- `android/app/src/main/kotlin/dev/qnzapret/StrategySocks5Server.kt`
+  Собственный локальный SOCKS5 proxy для strategy runtime. Принимает трафик от `hev-socks5-tunnel`, применяет HTTP/TLS/QUIC decisions и открывает исходящие protected TCP/UDP sockets.
+- `android/app/src/main/kotlin/dev/qnzapret/TProxyService.kt`
+  JNI-обертка над `hev-socks5-tunnel`: загрузка native-библиотеки, запуск, остановка и статистика TUN-to-SOCKS слоя.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretAndroidRuntime.kt`
   Координатор Android runtime: компилирует профиль, проверяет assets, запускает local strategy proxy и TUN lifecycle.
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
   Lifecycle локального strategy proxy и держатель native strategy engine.
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
-  Lifecycle TUN transport. При `establishTunnel=false` оставляет default-route выключенным и сообщает capability flags; при `establishTunnel=true` поднимает IPv4/IPv6 TUN routes/DNS и запускает forwarder только когда TCP/UDP capabilities готовы.
+  Lifecycle TUN transport. Дефолтный Android запуск использует `establishTunnel=true`, поднимает IPv4/IPv6 TUN routes, добавляет DNS из выбранной validated underlying-сети, сообщает ее через `Builder.setUnderlyingNetworks(...)`, исключает собственный пакет из VPN и передает fd в `hev-socks5-tunnel`; при явном `establishTunnel=false` оставляет default-route выключенным и сообщает capability flags.
+- `android/app/src/main/kotlin/dev/qnzapret/UnderlyingNetworkSelector.kt`
+  Выбирает validated unrestricted non-VPN сеть и ее DNS для TUN и protected sockets.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
   In-memory snapshot store для Android runtime-состояния.
 - `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`

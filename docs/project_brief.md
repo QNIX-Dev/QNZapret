@@ -21,11 +21,11 @@ Android-направление строится как no-root VPN/proxy runtime
 
 - frontend: Flutter + Dart
 - backend/runtime target: платформенный runtime-контур, подключаемый через adapters
-- Android runtime target: `VpnService` + local strategy proxy + userspace TUN transport
+- Android runtime target: `VpnService` + `hev-socks5-tunnel` + local strategy SOCKS5 proxy
 
 ## Текущая стадия
 
-Проект находится на стадии объединенного frontend/backend среза: продуктовый Flutter shell уже подключен к общей Dart runtime-поверхности, а Android-направление доведено до native strategy engine, userspace forwarding foundation и QUIC host correlation.
+Проект находится на стадии объединенного frontend/backend среза: продуктовый Flutter shell уже подключен к общей Dart runtime-поверхности, а Android-направление доведено до native strategy engine, `hev-socks5-tunnel` TUN-to-SOCKS path, local strategy SOCKS5 proxy и QUIC host correlation.
 
 Что уже есть:
 
@@ -53,22 +53,22 @@ Android-направление строится как no-root VPN/proxy runtime
 - Android strategy runtime coordinator в `QnzapretAndroidRuntime.kt`
 - Android local strategy proxy lifecycle в `LocalStrategyProxy.kt`
 - native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
-- QUIC host correlation в `QuicHostCorrelation.kt`: UDP/53 DNS A/AAAA responses и уже распознанный TCP HTTP/TLS host связываются с destination IP, чтобы UDP/443 QUIC Initial мог получить `knownHost`
+- QUIC host correlation в `QuicHostCorrelation.kt`: UDP/53 DNS A/AAAA responses и уже распознанный TCP HTTP/TLS host связываются с destination IP, чтобы UDP/443 QUIC Initial мог получить `knownHost`; дефолтный QUIC rule не зависит от `knownHost`, потому что Android Private DNS/DoT часто скрывает DNS path
 - IPv4/IPv6 UDP packet codec и TCP segment codec в `IpPacketCodec.kt`
-- userspace forwarder core в `TunPacketForwarder.kt` с IPv4/IPv6 UDP relay через protected `DatagramSocket` и TCP relay/state machine через protected `Socket`; TCP path обрабатывает duplicate/overlap retransmits, ACK/drop для out-of-order payload и TCP/UDP idle session cleanup
-- TUN lifecycle в `TunTransport.kt`: default-route остается выключенным при `establishTunnel=false`, но может подниматься при готовых TCP/UDP capabilities и явном `establishTunnel=true`
+- локальный strategy SOCKS5 proxy в `StrategySocks5Server.kt`: принимает CONNECT и UDP_ASSOCIATE от `hev-socks5-tunnel`, применяет `StrategyRuntimeEngine`, TLS record split, best-effort TCP fake с малым hop limit, UDP fake для QUIC и открывает исходящие sockets через `VpnService.protect`
+- TUN lifecycle в `TunTransport.kt`: default-route поднимается дефолтным Android launch config при `establishTunnel=true`, собственный пакет приложения исключается из VPN, TUN получает DNS из выбранной underlying-сети и сообщает ее через `setUnderlyingNetworks`; TUN fd передается в MIT `hev-socks5-tunnel`, который маршрутизирует TCP/UDP в локальный strategy SOCKS5 proxy
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
 - Android launcher icons через adaptive icon resources и desktop/window icons для Linux/Windows
 - базовые тесты сериализации и парсинга runtime-моделей
-- Android JVM unit tests для TCP relay state, IPv4/IPv6 TCP packet codec, QUIC host correlation и strategy engine QUIC decisions
+- Android JVM unit tests для TCP relay state, IPv4/IPv6 TCP packet codec, TLS record split transform, QUIC host correlation и strategy engine QUIC decisions
 - widget-тесты для home, settings и logs layout
 
 Что еще не подключено:
 
-- оставшийся TCP hardening: out-of-order buffering, полноценный write backpressure, расширенная диагностика и Android device smoke при `establishTunnel=true`
-- raw TCP `fake`/sequence tricks в no-root socket mode; текущий TCP path безопасно применяет только split как best-effort stream write split и пропускает небезопасный fake
+- оставшийся hardening local SOCKS5 proxy: write backpressure, лимиты сессий, расширенная диагностика и Android device smoke при `establishTunnel=true`
+- raw TCP sequence/timestamp tricks в no-root socket mode; текущий TCP path безопасно применяет TLS record split для TLS, best-effort stream split для остальных TCP payload и пробует TCP fake только как low-hop-limit socket write с безопасным пропуском при недоступной TTL/hop-limit опции
 - расширенная QUIC correlation для DoH/DoT, DNS cache misses и более сложных multi-IP сценариев; базовый UDP/53 + TCP HTTP/TLS correlation уже подключен
 - production поток логов из backend; текущий экран логов уже показывает application/runtime-controller events, но еще не читает native log stream
 - desktop bridge implementations для Linux и Windows
@@ -82,7 +82,9 @@ Android-направление строится как no-root VPN/proxy runtime
 
 Android target path:
 
-`Android VpnService -> TUN transport -> userspace forwarder -> local strategy proxy -> protected sockets`
+`Android VpnService -> TUN fd -> hev-socks5-tunnel -> local strategy SOCKS5 proxy -> protected sockets`
+
+Архитектурный ориентир совпадает с проверенной схемой ByeByeDPI: Android VPN-режим используется только для локального перенаправления трафика, без удаленного VPN-сервера. При этом GPL-код Android-обвязки ByeByeDPI не копируется; в проекте остается собственная Kotlin-реализация lifecycle/strategy proxy, а сторонний TUN-to-SOCKS компонент ограничен MIT `hev-socks5-tunnel`.
 
 Hostlists в strategy profile трактуются как списки включения DPI-bypass действий.
 Если поток не совпал со списками, production local strategy proxy должен пропускать его напрямую через protected socket без fake/split действий.
@@ -104,6 +106,8 @@ Hostlists в strategy profile трактуются как списки вклю�
 - `lib/core/backend/proxy_runtime_controller.dart`
 - `lib/core/backend/proxy_runtime_factory.dart`
 - `docs/runtime_bridge_contract.md`
+- `docs/android_runtime_handoff.md`
+- `docs/android_uid_network_blocker.md`
 
 Текущий публичный Dart API строится вокруг `ProxyRuntime`:
 
@@ -161,7 +165,7 @@ Composition root создает `createDefaultProxyRuntime()` и передае�
 
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
-1. добить оставшийся TCP hardening: out-of-order buffering, write backpressure, диагностика и Android device smoke при `establishTunnel=true`;
+1. добить оставшийся local proxy hardening: write backpressure, лимиты сессий, диагностика и Android device smoke при `establishTunnel=true`;
 2. добавить production log stream поверх текущего controller/snapshot слоя;
 3. расширить QUIC correlation за пределы UDP/53 и prior TCP HTTP/TLS hints;
 4. после Android закрепить equivalent contract для Linux и Windows.

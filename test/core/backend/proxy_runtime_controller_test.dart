@@ -70,6 +70,37 @@ void main() {
     },
   );
 
+  test('controller waits for Android start transition to settle', () async {
+    final runtime = _FakeRuntime(
+      snapshot: const ProxyRuntimeSnapshot(
+        platform: ProxyPlatform.android,
+        state: ProxyRuntimeState.idle,
+        message: 'Готово',
+        backendConnected: true,
+        vpnPermissionGranted: true,
+        serviceActive: false,
+        strategyEngineReady: false,
+        trafficForwarderReady: false,
+        tunnelActive: false,
+        packetCodecReady: false,
+        udpForwarderReady: false,
+        ipv6PacketCodecReady: false,
+        ipv6UdpForwarderReady: false,
+        tcpForwarderReady: false,
+      ),
+      startTransitionSnapshots: 1,
+    );
+    final controller = ProxyRuntimeController(runtime: runtime);
+
+    addTearDown(controller.dispose);
+
+    final ok = await controller.start();
+
+    expect(ok, isTrue);
+    expect(controller.snapshot.state, ProxyRuntimeState.running);
+    expect(controller.snapshot.serviceActive, isTrue);
+  });
+
   test('controller captures platform failures for UI', () async {
     final runtime = _FakeRuntime(
       snapshot: ProxyRuntimeSnapshot.initial(ProxyPlatform.android),
@@ -91,18 +122,38 @@ void main() {
 }
 
 final class _FakeRuntime implements ProxyRuntime {
-  _FakeRuntime({required ProxyRuntimeSnapshot snapshot, this.startError})
-    : _snapshot = snapshot;
+  _FakeRuntime({
+    required ProxyRuntimeSnapshot snapshot,
+    this.startError,
+    this.startTransitionSnapshots = 0,
+  }) : _snapshot = snapshot;
 
   ProxyRuntimeSnapshot _snapshot;
   final Object? startError;
+  int startTransitionSnapshots;
   ProxyLaunchConfig? startedConfig;
 
   @override
   ProxyPlatform get platform => _snapshot.platform;
 
   @override
-  Future<ProxyRuntimeSnapshot> getSnapshot() async => _snapshot;
+  Future<ProxyRuntimeSnapshot> getSnapshot() async {
+    if (_snapshot.state == ProxyRuntimeState.starting &&
+        startTransitionSnapshots > 0) {
+      startTransitionSnapshots -= 1;
+      return _snapshot;
+    }
+
+    if (_snapshot.state == ProxyRuntimeState.starting) {
+      _snapshot = _snapshot.copyWith(
+        state: ProxyRuntimeState.running,
+        message: 'Работает',
+        serviceActive: true,
+      );
+    }
+
+    return _snapshot;
+  }
 
   @override
   Future<ProxyPrepareResult> prepare() async {
@@ -118,6 +169,15 @@ final class _FakeRuntime implements ProxyRuntime {
     }
 
     startedConfig = config;
+    if (startTransitionSnapshots > 0) {
+      _snapshot = _snapshot.copyWith(
+        state: ProxyRuntimeState.starting,
+        message: 'Запускается',
+        serviceActive: true,
+      );
+      return;
+    }
+
     _snapshot = _snapshot.copyWith(
       state: ProxyRuntimeState.running,
       message: 'Работает',

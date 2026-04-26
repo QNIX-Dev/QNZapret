@@ -66,11 +66,13 @@
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyProfile.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/StrategySocks5Server.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/TProxyService.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/TunPacketForwarder.kt`
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
+- `android/app/src/main/kotlin/dev/qnzapret/UnderlyingNetworkSelector.kt`
 
 Именно эти артефакты должны рассматриваться как shared contract surface для текущей Android-интеграции.
 
@@ -84,7 +86,7 @@
 - какие поля snapshot UI реально использует
 - какие состояния backend может гарантировать
 - какие native errors считаются публичными
-- как отличать foreground service от fully connected userspace forwarder
+- как отличать foreground service от fully connected TUN-to-SOCKS stack
 - какие части strategy profile являются стабильным no-root subset
 
 Результат:
@@ -135,12 +137,14 @@ Composition root создает `ProxyRuntime` и передает его чер
 - snapshot/message после старта должен отражать выбранный strategy profile
 - snapshot/message после старта должен отражать наличие или отсутствие нужных strategy assets
 - snapshot после старта должен различать `strategyEngineReady`, `trafficForwarderReady`, `tunnelActive`, `packetCodecReady`, `udpForwarderReady`, `ipv6PacketCodecReady`, `ipv6UdpForwarderReady` и `tcpForwarderReady`
-- при `establishTunnel=false` snapshot должен показывать готовые capability flags, но `trafficForwarderReady=false` и `tunnelActive=false`
-- при `establishTunnel=true` Android должен поднимать TUN fd только если TCP/UDP forwarder capabilities готовы
-- домен вне hostlists должен проходить direct forwarding без fake/split/udpFake действий
-- TCP hostlist match должен применять `split` как best-effort stream write split и не отправлять небезопасный TCP `fake` в protected socket mode
-- TCP relay должен игнорировать full duplicate retransmits, форвардить только новый tail при overlap retransmit, ACK/drop out-of-order payload без продвижения окна и чистить idle sessions
-- QUIC hostlist match должен применять `udpFake`, когда UDP/443 Initial получает `knownHost` из UDP/53 DNS response или prior TCP HTTP/TLS host correlation
+- при дефолтном `establishTunnel=true` Android должен поднимать TUN fd только если `hev-socks5-tunnel` и local strategy SOCKS5 proxy готовы
+- собственный пакет приложения должен быть исключен из VPN, а runtime UDP/TCP sockets local proxy должны проходить через `VpnService.protect`; manifest должен содержать `ACCESS_NETWORK_STATE`, чтобы TUN мог выбрать underlying network и ее DNS
+- TUN должен добавлять DNS из выбранной underlying-сети и передавать эту сеть в `Builder.setUnderlyingNetworks(...)`, чтобы DNS внутри VPN совпадал с реальной сетью устройства
+- при явном `establishTunnel=false` snapshot должен показывать готовые capability flags, но `trafficForwarderReady=false` и `tunnelActive=false`
+- домен вне TCP hostlists должен проходить direct forwarding без fake/split действий
+- TCP hostlist match должен применять TLS `split` как TLS record split, для остальных TCP payload использовать best-effort stream write split, а TCP `fake` отправлять только как low-hop-limit socket write с безопасным пропуском, если Android не дает применить TTL/hop-limit
+- TCP relay в local SOCKS5 proxy должен корректно закрывать обе стороны потока, не держать stop lifecycle и применять strategy actions только к первому payload chunk
+- QUIC Initial должен применять `udpFake` по дефолтному QUIC rule даже без `knownHost`, потому что Private DNS/DoT может скрыть DNS-корреляцию
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
 
@@ -178,6 +182,11 @@ Composition root создает `ProxyRuntime` и передает его чер
 
 Когда backend будет готов к следующей интеграции, удобно передавать задачу в таком формате.
 
+Текущее состояние Android runtime зафиксировано в:
+
+- `docs/android_runtime_handoff.md`
+- `docs/android_uid_network_blocker.md`
+
 ### От frontend к backend
 
 - актуальный `runtime_bridge_contract.md`
@@ -210,16 +219,16 @@ Composition root создает `ProxyRuntime` и передает его чер
 - strategy profile передается из Dart в Android bridge
 - hostlists и payload blobs дефолтной стратегии упакованы в Android assets
 - native strategy engine загружает payload blobs, регистрирует hostlists и возвращает direct/desync decisions
-- IPv4/IPv6 packet codec, UDP relay core и TCP relay/state machine готовы; TUN default-route включается только при явном `establishTunnel=true`
+- `hev-socks5-tunnel`, SOCKS5 UDP relay и TCP relay готовы; TUN default-route включается дефолтным Android launch config при `establishTunnel=true`
 - hostlists используются как включение desync-правил, а unmatched traffic сохраняет политику `direct`
 - local strategy proxy и TUN transport подключены за Android service
-- userspace forwarder передает трафик из TUN fd в локальный strategy proxy
+- `hev-socks5-tunnel` передает трафик из TUN fd в локальный strategy SOCKS5 proxy
 - Android JVM tests для TCP relay state и packet codec проходят через Gradle
 - `flutter analyze` и `flutter test` проходят
 
 ## Предлагаемый порядок следующих задач
 
-1. Добить оставшийся TCP hardening: out-of-order buffering, write backpressure, расширенная диагностика и Android device smoke при `establishTunnel=true`.
+1. Добить оставшийся local proxy hardening: write backpressure, лимиты сессий, расширенная диагностика и Android device smoke при `establishTunnel=true`.
 2. Добавить production log stream поверх текущего `ProxyRuntimeController`.
 3. Расширить QUIC correlation для DoH/DoT, DNS cache misses и сложных multi-IP сценариев.
 4. Расширить diagnostics snapshot, если UI понадобится больше runtime health-полей.

@@ -3,6 +3,7 @@ package dev.qnzapret
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
+import android.util.Log
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -100,7 +101,7 @@ class ProxyRuntimeBridge(
             strategyProfile = StrategyProfileCodec.fromMap(
                 rawConfig["strategyProfile"] as? Map<*, *>,
             ),
-            establishTunnel = rawConfig["establishTunnel"] as? Boolean ?: false,
+            establishTunnel = rawConfig["establishTunnel"] as? Boolean ?: true,
             tunnelMtu = (rawConfig["tunnelMtu"] as? Number)?.toInt() ?: 8500,
         )
 
@@ -128,9 +129,32 @@ class ProxyRuntimeBridge(
     }
 
     private fun handleStop(result: MethodChannel.Result) {
+        Log.d(LOG_TAG, "stop requested")
         QnzapretVpnRuntimeStore.markStopping("Останавливаем сервис обхода.")
-        val stopped = context.stopService(Intent(context, QnzapretVpnService::class.java))
-        if (!stopped) {
+
+        val explicitServiceIntent = Intent(context, QnzapretVpnService::class.java)
+        val stopDelivered = try {
+            context.startService(QnzapretVpnService.createStopIntent(context)) != null
+        } catch (error: Exception) {
+            Log.d(
+                LOG_TAG,
+                "stop action failed: ${error.javaClass.simpleName}:${error.message ?: "-"}",
+            )
+            false
+        }
+        val stopRequested = try {
+            context.stopService(explicitServiceIntent)
+        } catch (error: Exception) {
+            Log.d(
+                LOG_TAG,
+                "stopService failed: ${error.javaClass.simpleName}:${error.message ?: "-"}",
+            )
+            false
+        }
+
+        Log.d(LOG_TAG, "stop command delivered=$stopDelivered stopRequested=$stopRequested")
+
+        if (!stopDelivered && !stopRequested) {
             QnzapretVpnRuntimeStore.markIdle(
                 context,
                 "Сервис обхода уже остановлен.",
@@ -142,5 +166,6 @@ class ProxyRuntimeBridge(
     private companion object {
         private const val CHANNEL_NAME = "dev.qnzapret/proxy_runtime"
         private const val REQUEST_PREPARE_VPN = 4017
+        private const val LOG_TAG = "QNZapretBridge"
     }
 }
