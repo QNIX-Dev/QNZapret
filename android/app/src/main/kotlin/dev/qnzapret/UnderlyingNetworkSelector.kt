@@ -2,8 +2,11 @@ package dev.qnzapret
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
+import java.net.Inet6Address
 import java.net.InetAddress
 
 internal object UnderlyingNetworkSelector {
@@ -33,6 +36,46 @@ internal object UnderlyingNetworkSelector {
             .orEmpty()
             .filter { dnsServer -> !dnsServer.isAnyLocalAddress && !dnsServer.isLoopbackAddress }
             .distinctBy { dnsServer -> dnsServer.hostAddress }
+    }
+
+    fun supportsIpv6(context: Context, network: Network): Boolean {
+        val connectivityManager = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val linkProperties = connectivityManager.getLinkProperties(network) ?: return false
+        return linkProperties.hasUsableIpv6Address() && linkProperties.hasIpv6DefaultRoute()
+    }
+
+    fun describeLink(context: Context, network: Network): String {
+        val connectivityManager = context.getSystemService(ConnectivityManager::class.java) ?: return "link=unavailable"
+        val linkProperties = connectivityManager.getLinkProperties(network) ?: return "link=unavailable"
+        val addresses = linkProperties.linkAddresses.joinToString(separator = ",") { address ->
+            address.address.hostAddress ?: "-"
+        }.ifBlank { "-" }
+        val dns = linkProperties.dnsServers.joinToString(separator = ",") { dnsServer ->
+            dnsServer.hostAddress ?: "-"
+        }.ifBlank { "-" }
+        val privateDns = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            linkProperties.privateDnsServerName ?: "-"
+        } else {
+            "api<28"
+        }
+        return "addresses=$addresses dns=$dns privateDns=$privateDns"
+    }
+
+    private fun LinkProperties.hasUsableIpv6Address(): Boolean {
+        return linkAddresses.any { linkAddress ->
+            val address = linkAddress.address
+            address is Inet6Address &&
+                !address.isAnyLocalAddress &&
+                !address.isLoopbackAddress &&
+                !address.isLinkLocalAddress
+        }
+    }
+
+    private fun LinkProperties.hasIpv6DefaultRoute(): Boolean {
+        return routes.any { route ->
+            val destination = route.destination ?: return@any false
+            destination.address is Inet6Address && destination.prefixLength == 0
+        }
     }
 
     private fun score(capabilities: NetworkCapabilities): Int {

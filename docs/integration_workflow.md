@@ -139,12 +139,19 @@ Composition root создает `ProxyRuntime` и передает его чер
 - snapshot после старта должен различать `strategyEngineReady`, `trafficForwarderReady`, `tunnelActive`, `packetCodecReady`, `udpForwarderReady`, `ipv6PacketCodecReady`, `ipv6UdpForwarderReady` и `tcpForwarderReady`
 - при дефолтном `establishTunnel=true` Android должен поднимать TUN fd только если `hev-socks5-tunnel` и local strategy SOCKS5 proxy готовы
 - собственный пакет приложения должен быть исключен из VPN, а runtime UDP/TCP sockets local proxy должны проходить через `VpnService.protect`; manifest должен содержать `ACCESS_NETWORK_STATE`, чтобы TUN мог выбрать underlying network и ее DNS
+- `QNZapretNetTest` должен отработать до старта runtime/TUN и после старта TUN, чтобы отдельно видеть доступность plain/protected/bound TCP и protected/bound UDP DNS probe из UID приложения
 - TUN должен добавлять DNS из выбранной underlying-сети и передавать эту сеть в `Builder.setUnderlyingNetworks(...)`, чтобы DNS внутри VPN совпадал с реальной сетью устройства
+- на IPv4-only underlying-сети TUN не должен объявлять `::/0`, а protected TCP/UDP upstream до IPv6 destination должен быстро логировать controlled no-route вместо длинного timeout
 - при явном `establishTunnel=false` snapshot должен показывать готовые capability flags, но `trafficForwarderReady=false` и `tunnelActive=false`
 - домен вне TCP hostlists должен проходить direct forwarding без fake/split действий
 - TCP hostlist match должен применять TLS `split` как TLS record split, для остальных TCP payload использовать best-effort stream write split, а TCP `fake` отправлять только как low-hop-limit socket write с безопасным пропуском, если Android не дает применить TTL/hop-limit
 - TCP relay в local SOCKS5 proxy должен корректно закрывать обе стороны потока, не держать stop lifecycle и применять strategy actions только к первому payload chunk
 - QUIC Initial должен применять `udpFake` по дефолтному QUIC rule даже без `knownHost`, потому что Private DNS/DoT может скрыть DNS-корреляцию
+- logcat для Android smoke должен включать timing-события `QNZapretProxy`: TCP connect start/ok/fail, first payload, strategy decision, upstream first byte, UDP send/receive; Telegram endpoint candidates должны быть видны как диагностика, а не как пользовательский proxy endpoint
+- для Telegram smoke нужно отдельно проверять `telegram relay connect start/ok/failed` при наличии `StrategyProfile.endpointPolicies`; если relay не настроен, проверять `telegram preconnect begin/attempt/ok/failed`, а при `directBlockedBeforePayload=true` не считать payload-level fake/split/desync подходящим fix
+- для Telegram compatibility mode нужно проверять `QNZapretTgCompat`: локальный `telegram kotlin proxy listening`, route provider `load/fetch/decode/cache`, CF probe `start/ok/failed`, открытие Telegram setup screen, MTProxy handshake `telegram compatibility start`, DNS `telegram cf dns start/ok/failed`, route `telegram cf route start/attempt/ok/failed`, HTTP status 101/403/429 и корректный stop `telegram kotlin proxy stopped`
+- foreground notification должна быть ongoing, показывать состояния запуска/активности/ошибки/остановки и давать actions `Остановить`/`Перезапустить`; на Android 13+ приложение должно запросить `POST_NOTIFICATIONS`; скорость можно показывать только после появления честного counters contract
+- Quick Settings Tile должен переключать тот же Android runtime: при выданном VPN permission запускать дефолтный профиль, при активном runtime останавливать через service stop action, а без permission открывать `MainActivity` для consent flow
 - `stop()` после старта должен вернуть runtime в `idle`
 - revoke permission должен вернуть понятное состояние
 
@@ -220,6 +227,8 @@ Composition root создает `ProxyRuntime` и передает его чер
 - hostlists и payload blobs дефолтной стратегии упакованы в Android assets
 - native strategy engine загружает payload blobs, регистрирует hostlists и возвращает direct/desync decisions
 - `hev-socks5-tunnel`, SOCKS5 UDP relay и TCP relay готовы; TUN default-route включается дефолтным Android launch config при `establishTunnel=true`
+- IPv6 route в TUN включается только при реально доступном IPv6 на selected underlying network
+- Android foreground notification имеет actions stop/restart и не показывает fake speed
 - hostlists используются как включение desync-правил, а unmatched traffic сохраняет политику `direct`
 - local strategy proxy и TUN transport подключены за Android service
 - `hev-socks5-tunnel` передает трафик из TUN fd в локальный strategy SOCKS5 proxy

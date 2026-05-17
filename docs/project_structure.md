@@ -9,6 +9,9 @@
 
 ```text
 docs/
+  android_telegram_remote_relay_contract.md
+  android_telegram_cloudflare_routes.md
+  android_telegram_tg_ws_proxy_research.md
   android_runtime_handoff.md
   android_uid_network_blocker.md
   integration_workflow.md
@@ -92,6 +95,7 @@ android/
         Application.mk
         hev-socks5-tunnel/
       kotlin/dev/qnzapret/
+        AndroidNetworkSelfTest.kt
         HostlistMatcher.kt
         IpPacketCodec.kt
         L7Detectors.kt
@@ -99,16 +103,24 @@ android/
         MainActivity.kt
         ProxyRuntimeBridge.kt
         QuicHostCorrelation.kt
+        QnzapretQuickSettingsTileService.kt
         QnzapretAndroidRuntime.kt
         QnzapretVpnRuntimeStore.kt
         QnzapretVpnService.kt
         StrategyAssetStore.kt
         StrategyAssetVerifier.kt
         StrategyProfile.kt
+        StrategyProfileDevOverrides.kt
         StrategyRuntimeEngine.kt
         StrategyRuntimePlan.kt
         StrategySocks5Server.kt
+        Socks5RelayClient.kt
         TcpRelayState.kt
+        TelegramCloudflareResolver.kt
+        TelegramCompatibilityProxyManager.kt
+        TelegramMtProxyCrypto.kt
+        TelegramRouteConfigProvider.kt
+        TelegramWebSocketTransport.kt
         TProxyService.kt
         TlsRecordSplitTransform.kt
         TunTransport.kt
@@ -118,8 +130,11 @@ android/
       kotlin/dev/qnzapret/
         IpPacketCodecTest.kt
         QuicHostCorrelationTest.kt
+        Socks5RelayClientTest.kt
+        StrategyProfileCodecTest.kt
         StrategyRuntimeEngineTest.kt
         TcpRelayStateTest.kt
+        TelegramRouteDomainCodecTest.kt
         TlsRecordSplitTransformTest.kt
 
 linux/
@@ -176,6 +191,9 @@ test/
   - `ProxyPrepareResult`
   - `ProxyLaunchConfig`
   - `StrategyProfile`
+  - `StrategyEndpointPolicy`
+  - `StrategyEndpointRoute`
+  - `StrategyRelayAuth`
   - `StrategyRule`
   - `StrategyAction`
   - `UnmatchedTrafficPolicy`
@@ -327,22 +345,28 @@ Android launcher icons, Windows icon и Linux window icon должны гене�
 Файлы приложения:
 
 - `android/app/src/main/AndroidManifest.xml`
-  Разрешения, activity, VPN service declaration и foreground service metadata. Для Android runtime важны `INTERNET`, `ACCESS_NETWORK_STATE`, foreground service permissions и `BIND_VPN_SERVICE` на service.
+  Разрешения, activity, VPN service declaration и foreground service metadata. Для Android runtime важны `INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, foreground service permissions и `BIND_VPN_SERVICE` на service.
 - `android/app/src/main/assets/qnzapret/`
   APK-bundled assets для Android runtime: hostlists и binary payloads дефолтной lightweight стратегии.
 - `android/app/src/main/jni/`
   Native-сборка `hev-socks5-tunnel` через Android NDK. Этот MIT-компонент получает TUN fd и перенаправляет TCP/UDP в локальный SOCKS5 proxy.
 - `android/app/src/main/kotlin/dev/qnzapret/MainActivity.kt`
-  Регистрирует `ProxyRuntimeBridge` и прокидывает `onActivityResult` для VPN prepare flow.
+  Регистрирует `ProxyRuntimeBridge`, прокидывает `onActivityResult` для VPN prepare flow и запрашивает `POST_NOTIFICATIONS` на Android 13+, чтобы foreground notification было видно пользователю.
+- `android/app/src/main/kotlin/dev/qnzapret/AndroidNetworkSelfTest.kt`
+  Controlled network self-test из процесса приложения. Логирует `QNZapretNetTest` до старта VPN и после старта TUN: UID/package, selected network, capabilities, DNS/Private DNS и результаты plain/protected/bound TCP/UDP проб.
 - `android/app/src/main/kotlin/dev/qnzapret/ProxyRuntimeBridge.kt`
   `MethodChannel` bridge между Dart и Android runtime.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnService.kt`
   Foreground `VpnService`.
-  Сейчас поднимает notification и стартует native strategy runtime.
+  Сейчас поднимает stateful foreground notification, обрабатывает actions `Остановить`/`Перезапустить` и стартует native strategy runtime.
+- `android/app/src/main/kotlin/dev/qnzapret/QnzapretQuickSettingsTileService.kt`
+  Native Quick Settings Tile. Читает Android runtime store, переключает запуск/остановку `QnzapretVpnService` с дефолтным Android-профилем и открывает `MainActivity`, если VPN permission еще не выдан.
 - `android/app/src/main/kotlin/dev/qnzapret/VpnRuntimeConfig.kt`
   Android-представление `ProxyLaunchConfig`, включая strategy profile и TUN flags.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyProfile.kt`
-  Kotlin-модель и codec для strategy profile payload.
+  Kotlin-модель и codec для strategy profile payload, включая `endpointPolicies` для Telegram remote relay.
+- `android/app/src/main/kotlin/dev/qnzapret/StrategyProfileDevOverrides.kt`
+  Локальный dev/smoke override `qnzapret/telegram_relay.json` для передачи Telegram relay endpoint policy без коммита реальных credentials.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetVerifier.kt`
   Проверяет наличие hostlists и payload blobs в Android assets перед запуском runtime.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetStore.kt`
@@ -363,7 +387,23 @@ Android launcher icons, Windows icon и Linux window icon должны гене�
   Компилятор профиля в компактный runtime plan.
   План сохраняет `unmatchedTrafficPolicy`, чтобы local strategy proxy знал, что потоки вне hostlists нужно вести direct forwarding без desync-действий.
 - `android/app/src/main/kotlin/dev/qnzapret/StrategySocks5Server.kt`
-  Собственный локальный SOCKS5 proxy для strategy runtime. Принимает трафик от `hev-socks5-tunnel`, применяет HTTP/TLS/QUIC decisions и открывает исходящие protected TCP/UDP sockets.
+  Собственный локальный SOCKS5 proxy для strategy runtime. Принимает трафик от `hev-socks5-tunnel`, применяет HTTP/TLS/QUIC decisions, открывает исходящие protected TCP/UDP sockets, логирует TCP/UDP timing, YouTube DNS/UDP throughput diagnostics, помечает Telegram endpoint candidates, выбирает SOCKS5 remote relay policy до direct connect и делает bounded pre-connect fallback для Telegram без relay.
+- `android/app/src/main/kotlin/dev/qnzapret/Socks5RelayClient.kt`
+  Минимальный SOCKS5 client для remote relay: no-auth, username/password auth, CONNECT original target IPv4/IPv6/domain и стабильные error codes.
+- `android/app/src/main/kotlin/dev/qnzapret/TelegramCompatibilityProxyManager.kt`
+  Lifecycle локального Kotlin MTProxy compatibility proxy: хранит локальный `dd` secret/port и health-based setup state, слушает `127.0.0.1:1443`, открывает Telegram proxy confirmation screen и останавливается вместе с `QnzapretVpnService`.
+- `android/app/src/main/kotlin/dev/qnzapret/TelegramSetupHealth.kt`
+  Health-модель Telegram setup: fingerprint текущего `host:port:secret`, timestamp открытия setup screen, успешного MTProxy handshake и успешного WSS bridge.
+- `android/app/src/main/kotlin/dev/qnzapret/TelegramSetupActivity.kt`
+  Transparent trampoline для notification action `Подключить Telegram`: открывает `tg://proxy` или fallback `https://t.me/proxy` как user-initiated Activity launch.
+- `android/app/src/main/kotlin/dev/qnzapret/TelegramMtProxyCrypto.kt`
+  Clean-room MTProxy obfuscation/AES-CTR handshake. Извлекает logical/raw DC id, media DC flag и protocol marker из 64-byte init payload.
+- `android/app/src/main/kotlin/dev/qnzapret/TelegramRouteConfigProvider.kt`
+  Route-provider для Telegram compatibility mode: локальный `telegram_compat.json`, cached/fresh public Flowseal domains, decode/cache TTL 12 часов, background CF probe и future placeholder для signed QNZapret route config.
+- `android/app/src/main/kotlin/dev/qnzapret/TelegramWebSocketTransport.kt`
+  Clean-room WSS `/apiws` transport для Telegram compatibility proxy. Строит direct/Cloudflare route candidates, сохраняет active CF domain, учитывает 429 cooldown, держит TLS SNI/Host при connect к resolved IP, ведет EWMA route scoring, one-shot WSS pool и логирует route/session timing.
+- `android/app/src/main/kotlin/dev/qnzapret/TelegramCloudflareResolver.kt`
+  Resolver для Telegram Cloudflare route: system/network DNS, DoH/UDP fallback, IPv4 preference на IPv4-only underlying-сетях и 5-минутный cache resolved IP.
 - `android/app/src/main/kotlin/dev/qnzapret/TProxyService.kt`
   JNI-обертка над `hev-socks5-tunnel`: загрузка native-библиотеки, запуск, остановка и статистика TUN-to-SOCKS слоя.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretAndroidRuntime.kt`
@@ -371,9 +411,9 @@ Android launcher icons, Windows icon и Linux window icon должны гене�
 - `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
   Lifecycle локального strategy proxy и держатель native strategy engine.
 - `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
-  Lifecycle TUN transport. Дефолтный Android запуск использует `establishTunnel=true`, поднимает IPv4/IPv6 TUN routes, добавляет DNS из выбранной validated underlying-сети, сообщает ее через `Builder.setUnderlyingNetworks(...)`, исключает собственный пакет из VPN и передает fd в `hev-socks5-tunnel`; при явном `establishTunnel=false` оставляет default-route выключенным и сообщает capability flags.
+  Lifecycle TUN transport. Дефолтный Android запуск использует `establishTunnel=true`, поднимает IPv4 default-route, добавляет IPv6 route только при рабочем IPv6 на selected underlying-сети, добавляет DNS из выбранной validated underlying-сети, сообщает ее через `Builder.setUnderlyingNetworks(...)`, исключает собственный пакет из VPN и передает fd в `hev-socks5-tunnel`; при явном `establishTunnel=false` оставляет default-route выключенным и сообщает capability flags.
 - `android/app/src/main/kotlin/dev/qnzapret/UnderlyingNetworkSelector.kt`
-  Выбирает validated unrestricted non-VPN сеть и ее DNS для TUN и protected sockets.
+  Выбирает validated unrestricted non-VPN сеть, ее DNS, Private DNS/link diagnostics и IPv6-route capability для TUN и protected sockets.
 - `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
   In-memory snapshot store для Android runtime-состояния.
 - `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`

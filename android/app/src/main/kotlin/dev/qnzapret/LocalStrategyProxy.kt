@@ -56,6 +56,8 @@ internal class LocalStrategyProxy(
             host = proxyHost,
             port = proxyPort,
             engine = nextEngine,
+            endpointPolicies = config.strategyProfile.endpointPolicies,
+            tunnelMtu = config.tunnelMtu,
         )
         val nextEndpoint = nextServer.start()
         val nextStatus = LocalStrategyProxyStatus(

@@ -6,6 +6,14 @@ enum StrategyProtocol { http, tls, quic }
 
 enum StrategyActionKind { split, fake, udpFake }
 
+enum StrategyEndpointTransport { tcp }
+
+enum StrategyEndpointRouteKind { remoteRelay }
+
+enum StrategyRelayProtocol { socks5, httpsConnect }
+
+enum StrategyEndpointFailureMode { failClosed }
+
 enum UnmatchedTrafficPolicy { direct }
 
 class ProxyPrepareResult {
@@ -95,6 +103,7 @@ class StrategyProfile {
     required this.unmatchedTrafficPolicy,
     required this.blobs,
     required this.rules,
+    this.endpointPolicies = const [],
   });
 
   static const defaultLightweight = StrategyProfile(
@@ -107,6 +116,7 @@ class StrategyProfile {
       'tls_google': 'qnzapret/payloads/tls_clienthello_www_google_com.bin',
       'quic_google': 'qnzapret/payloads/quic_initial_www_google_com.bin',
     },
+    endpointPolicies: [],
     rules: [
       StrategyRule(
         id: 'http-hostlist-fake-split',
@@ -175,6 +185,7 @@ class StrategyProfile {
   final String description;
   final UnmatchedTrafficPolicy unmatchedTrafficPolicy;
   final Map<String, String> blobs;
+  final List<StrategyEndpointPolicy> endpointPolicies;
   final List<StrategyRule> rules;
 
   Map<String, Object?> toMap() {
@@ -184,12 +195,19 @@ class StrategyProfile {
       'description': description,
       'unmatchedTrafficPolicy': unmatchedTrafficPolicy.name,
       'blobs': blobs,
+      if (endpointPolicies.isNotEmpty)
+        'endpointPolicies': endpointPolicies
+            .map((policy) => policy.toMap())
+            .toList(growable: false),
       'rules': rules.map((rule) => rule.toMap()).toList(),
     };
   }
 
   factory StrategyProfile.fromMap(Map<Object?, Object?> map) {
     final blobs = _parseStringMap(map['blobs']);
+    final endpointPolicies = _parseMapList(
+      map['endpointPolicies'],
+    ).map(StrategyEndpointPolicy.fromMap).toList(growable: false);
     final rules = _parseMapList(
       map['rules'],
     ).map(StrategyRule.fromMap).toList(growable: false);
@@ -203,8 +221,120 @@ class StrategyProfile {
         map['unmatchedTrafficPolicy'] as String?,
       ),
       blobs: blobs.isEmpty ? defaultLightweight.blobs : blobs,
+      endpointPolicies: endpointPolicies,
       rules: rules.isEmpty ? defaultLightweight.rules : rules,
     );
+  }
+}
+
+class StrategyEndpointPolicy {
+  const StrategyEndpointPolicy({
+    required this.id,
+    required this.endpointClasses,
+    required this.route,
+    this.transport = StrategyEndpointTransport.tcp,
+  });
+
+  final String id;
+  final List<String> endpointClasses;
+  final StrategyEndpointTransport transport;
+  final StrategyEndpointRoute route;
+
+  Map<String, Object?> toMap() {
+    return {
+      'id': id,
+      'endpointClasses': endpointClasses,
+      'transport': transport.name,
+      'route': route.toMap(),
+    };
+  }
+
+  factory StrategyEndpointPolicy.fromMap(Map<Object?, Object?> map) {
+    return StrategyEndpointPolicy(
+      id: map['id'] as String? ?? '',
+      endpointClasses: _parseStringList(map['endpointClasses']),
+      transport: _parseStrategyEndpointTransport(map['transport'] as String?),
+      route: StrategyEndpointRoute.fromMap(_parseObjectMap(map['route'])),
+    );
+  }
+}
+
+class StrategyEndpointRoute {
+  const StrategyEndpointRoute({
+    required this.kind,
+    required this.protocol,
+    required this.host,
+    required this.port,
+    this.auth,
+    this.connectTimeoutMs = 3000,
+    this.relayConnectTimeoutMs = 5000,
+    this.failureMode = StrategyEndpointFailureMode.failClosed,
+  });
+
+  final StrategyEndpointRouteKind kind;
+  final StrategyRelayProtocol protocol;
+  final String host;
+  final int port;
+  final StrategyRelayAuth? auth;
+  final int connectTimeoutMs;
+  final int relayConnectTimeoutMs;
+  final StrategyEndpointFailureMode failureMode;
+
+  Map<String, Object?> toMap() {
+    return {
+      'kind': kind.name,
+      'protocol': protocol.name,
+      'host': host,
+      'port': port,
+      if (auth != null) 'auth': auth!.toMap(),
+      'connectTimeoutMs': connectTimeoutMs,
+      'relayConnectTimeoutMs': relayConnectTimeoutMs,
+      'failureMode': failureMode.name,
+    };
+  }
+
+  factory StrategyEndpointRoute.fromMap(Map<Object?, Object?> map) {
+    final auth = StrategyRelayAuth.fromMapOrNull(_parseObjectMap(map['auth']));
+    return StrategyEndpointRoute(
+      kind: _parseStrategyEndpointRouteKind(map['kind'] as String?),
+      protocol: _parseStrategyRelayProtocol(map['protocol'] as String?),
+      host: map['host'] as String? ?? '',
+      port: (map['port'] as num?)?.toInt() ?? 0,
+      auth: auth,
+      connectTimeoutMs: (map['connectTimeoutMs'] as num?)?.toInt() ?? 3000,
+      relayConnectTimeoutMs:
+          (map['relayConnectTimeoutMs'] as num?)?.toInt() ?? 5000,
+      failureMode: _parseStrategyEndpointFailureMode(
+        map['failureMode'] as String?,
+      ),
+    );
+  }
+}
+
+class StrategyRelayAuth {
+  const StrategyRelayAuth({this.username, this.password});
+
+  final String? username;
+  final String? password;
+
+  Map<String, Object?> toMap() {
+    return {
+      if (username != null) 'username': username,
+      if (password != null) 'password': password,
+    };
+  }
+
+  static StrategyRelayAuth? fromMapOrNull(Map<Object?, Object?> map) {
+    if (map.isEmpty) {
+      return null;
+    }
+    final username = map['username'] as String?;
+    final password = map['password'] as String?;
+    if ((username == null || username.isEmpty) &&
+        (password == null || password.isEmpty)) {
+      return null;
+    }
+    return StrategyRelayAuth(username: username, password: password);
   }
 }
 
@@ -305,6 +435,10 @@ class ProxyRuntimeSnapshot {
     required this.ipv6UdpForwarderReady,
     required this.tcpForwarderReady,
     this.activeProfileName,
+    this.telegramCompatibilityProxyReady = false,
+    this.telegramCompatibilitySetupRequired = false,
+    this.telegramCompatibilityProxyEndpoint,
+    this.telegramCompatibilityProxyMessage,
   });
 
   final ProxyPlatform platform;
@@ -322,6 +456,10 @@ class ProxyRuntimeSnapshot {
   final bool ipv6UdpForwarderReady;
   final bool tcpForwarderReady;
   final String? activeProfileName;
+  final bool telegramCompatibilityProxyReady;
+  final bool telegramCompatibilitySetupRequired;
+  final String? telegramCompatibilityProxyEndpoint;
+  final String? telegramCompatibilityProxyMessage;
 
   factory ProxyRuntimeSnapshot.initial(ProxyPlatform platform) {
     return ProxyRuntimeSnapshot(
@@ -339,11 +477,16 @@ class ProxyRuntimeSnapshot {
       ipv6PacketCodecReady: false,
       ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
+      telegramCompatibilityProxyReady: false,
+      telegramCompatibilitySetupRequired: false,
     );
   }
 
   factory ProxyRuntimeSnapshot.fromMap(Map<Object?, Object?> map) {
     final activeProfileName = map['activeProfileName'] as String?;
+    final telegramEndpoint =
+        map['telegramCompatibilityProxyEndpoint'] as String?;
+    final telegramMessage = map['telegramCompatibilityProxyMessage'] as String?;
     return ProxyRuntimeSnapshot(
       platform: _parsePlatform(map['platform'] as String?),
       state: _parseRuntimeState(map['state'] as String?),
@@ -362,6 +505,16 @@ class ProxyRuntimeSnapshot {
       activeProfileName: (activeProfileName?.isEmpty ?? true)
           ? null
           : activeProfileName,
+      telegramCompatibilityProxyReady:
+          map['telegramCompatibilityProxyReady'] as bool? ?? false,
+      telegramCompatibilitySetupRequired:
+          map['telegramCompatibilitySetupRequired'] as bool? ?? false,
+      telegramCompatibilityProxyEndpoint: (telegramEndpoint?.isEmpty ?? true)
+          ? null
+          : telegramEndpoint,
+      telegramCompatibilityProxyMessage: (telegramMessage?.isEmpty ?? true)
+          ? null
+          : telegramMessage,
     );
   }
 
@@ -381,6 +534,10 @@ class ProxyRuntimeSnapshot {
     bool? ipv6UdpForwarderReady,
     bool? tcpForwarderReady,
     String? activeProfileName,
+    bool? telegramCompatibilityProxyReady,
+    bool? telegramCompatibilitySetupRequired,
+    String? telegramCompatibilityProxyEndpoint,
+    String? telegramCompatibilityProxyMessage,
   }) {
     return ProxyRuntimeSnapshot(
       platform: platform ?? this.platform,
@@ -400,6 +557,18 @@ class ProxyRuntimeSnapshot {
           ipv6UdpForwarderReady ?? this.ipv6UdpForwarderReady,
       tcpForwarderReady: tcpForwarderReady ?? this.tcpForwarderReady,
       activeProfileName: activeProfileName ?? this.activeProfileName,
+      telegramCompatibilityProxyReady:
+          telegramCompatibilityProxyReady ??
+          this.telegramCompatibilityProxyReady,
+      telegramCompatibilitySetupRequired:
+          telegramCompatibilitySetupRequired ??
+          this.telegramCompatibilitySetupRequired,
+      telegramCompatibilityProxyEndpoint:
+          telegramCompatibilityProxyEndpoint ??
+          this.telegramCompatibilityProxyEndpoint,
+      telegramCompatibilityProxyMessage:
+          telegramCompatibilityProxyMessage ??
+          this.telegramCompatibilityProxyMessage,
     );
   }
 }
@@ -447,6 +616,8 @@ final class StubProxyRuntime implements ProxyRuntime {
       ipv6PacketCodecReady: false,
       ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
+      telegramCompatibilityProxyReady: false,
+      telegramCompatibilitySetupRequired: false,
     );
   }
 
@@ -485,6 +656,36 @@ StrategyActionKind _parseStrategyActionKind(String? rawValue) {
   );
 }
 
+StrategyEndpointTransport _parseStrategyEndpointTransport(String? rawValue) {
+  return StrategyEndpointTransport.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => StrategyEndpointTransport.tcp,
+  );
+}
+
+StrategyEndpointRouteKind _parseStrategyEndpointRouteKind(String? rawValue) {
+  return StrategyEndpointRouteKind.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => StrategyEndpointRouteKind.remoteRelay,
+  );
+}
+
+StrategyRelayProtocol _parseStrategyRelayProtocol(String? rawValue) {
+  return StrategyRelayProtocol.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => StrategyRelayProtocol.socks5,
+  );
+}
+
+StrategyEndpointFailureMode _parseStrategyEndpointFailureMode(
+  String? rawValue,
+) {
+  return StrategyEndpointFailureMode.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => StrategyEndpointFailureMode.failClosed,
+  );
+}
+
 UnmatchedTrafficPolicy _parseUnmatchedTrafficPolicy(String? rawValue) {
   return UnmatchedTrafficPolicy.values.firstWhere(
     (value) => value.name == rawValue,
@@ -500,6 +701,16 @@ Map<String, String> _parseStringMap(Object? rawValue) {
   return rawValue.map(
     (key, value) => MapEntry(key.toString(), value.toString()),
   );
+}
+
+Map<Object?, Object?> _parseObjectMap(Object? rawValue) {
+  if (rawValue is Map<Object?, Object?>) {
+    return rawValue;
+  }
+  if (rawValue is Map) {
+    return rawValue.map((key, value) => MapEntry(key, value));
+  }
+  return const {};
 }
 
 List<String> _parseStringList(Object? rawValue) {
