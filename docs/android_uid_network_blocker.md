@@ -4,11 +4,11 @@
 
 После перехода на схему `VpnService -> TUN fd -> hev-socks5-tunnel -> local strategy SOCKS5 proxy -> protected sockets` VPN path поднимается и трафик доходит до нашего local strategy proxy.
 
-Текущий оставшийся блокер не выглядит как ошибка TUN, `hev-socks5-tunnel` или правил стратегии. По проверкам на устройстве исходящие соединения не проходят именно из UID приложения, даже если приложение исключено из VPN и сокеты открываются как protected.
+Этот документ начинался как описание UID/app-network blocker. После controlled `QNZapretNetTest`, fresh install и release-smoke на Pixel 9 blocker больше не является главной рабочей гипотезой: protected/bound TCP из процесса приложения проходит, YouTube открывается через VPN path. Документ оставлен как regression checklist: если self-test снова покажет timeout до публичного IP из UID приложения, нужно сначала вернуться к этому уровню, а не переписывать TUN/strategy.
 
 ## Симптом
 
-На устройстве `7e7464c7`:
+Исторический симптом на устройстве `7e7464c7`:
 
 - приложение запускается;
 - VPN service поднимается;
@@ -54,7 +54,7 @@ adb shell /system/bin/nc -z -w 3 172.67.199.162 443
 
 ## Почему это важно
 
-Это объясняет, почему VPN "поднят", но видимого эффекта нет.
+Это объясняло состояние, когда VPN "поднят", но видимого эффекта нет.
 
 Цепочка до стратегии работает:
 
@@ -62,7 +62,7 @@ adb shell /system/bin/nc -z -w 3 172.67.199.162 443
 TUN fd -> hev-socks5-tunnel -> StrategySocks5Server -> StrategyRuntimeEngine
 ```
 
-Но следующая часть цепочки сейчас ломается:
+Если blocker возвращается, следующая часть цепочки ломается:
 
 ```text
 StrategySocks5Server -> protected Socket/DatagramSocket -> external network
@@ -70,27 +70,24 @@ StrategySocks5Server -> protected Socket/DatagramSocket -> external network
 
 То есть правила могут применяться к трафику, но реальный upstream connect не завершается.
 
-## Текущая гипотеза
+## Текущая интерпретация
 
-Наиболее вероятно, что это ограничение Android/OEM-прошивки, политики безопасности, профиля пользователя, app network policy, firewall/VPN-lockdown path или специфической связки `run-as`/UID на устройстве.
+Сейчас фокус сместился выше по стеку: Telegram и медленный YouTube нужно диагностировать по реальным endpoints, TCP/UDP timing, QUIC/TCP fallback, IPv6 route availability и strategy decisions в `QNZapretProxy`.
 
-Пока это не доказано до конца, не нужно считать проблему закрытой. Но текущие факты сильнее указывают на UID/OEM network block, чем на ошибку стратегии или TUN-to-SOCKS архитектуры.
+`QNZapretNetTest` остается обязательной контрольной точкой. Если pre/post self-test начинает падать на plain/protected/bound TCP, blocker снова считается актуальным.
 
 ## Следующие проверки
 
 Рекомендуемый порядок:
 
-1. Проверить приложение на другом Android-устройстве или эмуляторе без OEM-ограничений.
-2. Снять `adb shell dumpsys connectivity` во время активного VPN и отдельно после stop.
-3. Проверить `adb shell dumpsys netpolicy` и ограничения для UID `10416`.
-4. Проверить режимы battery saver, data saver, private DNS, always-on VPN и lockdown VPN.
-5. Проверить, меняется ли поведение после полной переустановки приложения с очисткой данных.
-6. Добавить в приложение временный controlled network self-test из самого процесса: connect к router IP, public IP и DNS endpoint до старта VPN и после старта VPN.
-7. Проверить, может ли `Network.openConnection()` через выбранную underlying network выйти наружу из процесса приложения.
+1. Снять `QNZapretNetTest` из приложения: controlled self-test выполняется в `QnzapretVpnService` до старта runtime/TUN и после старта TUN. Он проверяет plain TCP, protected TCP, selected-network socket factory, protected+selected-network bind и protected/bound UDP DNS probe из процесса приложения.
+2. Снять `adb shell dumpsys connectivity` во время активного VPN и отдельно после stop, чтобы видеть selected underlying network, DNS, Private DNS и наличие IPv6 default route.
+3. Если self-test падает, проверить `adb shell dumpsys netpolicy`, background/data saver/battery saver, always-on VPN и lockdown VPN.
+4. Если self-test успешен, анализировать `QNZapretProxy`: TCP connect timeout, UDP/QUIC send/receive, IPv6 no-route, DNS/Private DNS, first payload, strategy decision и upstream first byte.
 
 ## Важное замечание для следующей итерации
 
-Не стоит снова переписывать TUN layer или стратегию, пока не доказано, что UID приложения умеет открывать обычные исходящие соединения вне VPN.
+Не стоит снова переписывать TUN layer или стратегию, если UID приложения не умеет открывать обычные исходящие соединения вне VPN.
 
 Минимальный критерий для возвращения к DPI-логике:
 
@@ -98,4 +95,4 @@ StrategySocks5Server -> protected Socket/DatagramSocket -> external network
 из процесса приложения protected TCP connect до 192.168.1.1:80 или публичного IP:443 стабильно завершается успешно
 ```
 
-Только после этого имеет смысл измерять, насколько fake/split/udpFake реально влияют на YouTube или другие цели.
+Только после этого имеет смысл измерять, насколько fake/split/udpFake реально влияют на YouTube, Telegram или другие цели.

@@ -227,8 +227,9 @@ internal class QuicHostCorrelation {
         )
     }
 
-    fun observeDnsResponse(payload: ByteArray, now: Long = System.currentTimeMillis()) {
-        DnsMessageParser.parseAddressAnswers(payload).forEach { answer ->
+    fun observeDnsResponse(payload: ByteArray, now: Long = System.currentTimeMillis()): List<DnsAddressAnswer> {
+        val answers = DnsMessageParser.parseAddressAnswers(payload)
+        answers.forEach { answer ->
             rememberHost(
                 address = answer.address,
                 host = answer.host,
@@ -236,6 +237,7 @@ internal class QuicHostCorrelation {
                 ttlMs = dnsTtlMs(answer.ttlSeconds),
             )
         }
+        return answers
     }
 
     fun lookupHost(address: InetAddress, now: Long = System.currentTimeMillis()): String? {

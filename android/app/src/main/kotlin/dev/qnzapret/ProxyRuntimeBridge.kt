@@ -112,7 +112,7 @@ class ProxyRuntimeBridge(
         try {
             ContextCompat.startForegroundService(
                 context,
-                QnzapretVpnService.createStartIntent(context, config),
+                QnzapretVpnService.createUiStartIntent(context, config),
             )
             result.success(null)
         } catch (error: Exception) {

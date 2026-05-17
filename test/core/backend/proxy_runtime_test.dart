@@ -64,6 +64,52 @@ void main() {
     );
     expect(profile.rules.last.protocols, [StrategyProtocol.quic]);
     expect(profile.rules.last.actions.single.kind, StrategyActionKind.udpFake);
+    expect(profile.endpointPolicies, isEmpty);
+  });
+
+  test('strategy profile serializes Telegram endpoint relay policy', () {
+    const profile = StrategyProfile(
+      id: 'telegram-relay-smoke',
+      name: 'Telegram relay smoke',
+      description: 'Routes Telegram DC endpoints through a remote relay.',
+      unmatchedTrafficPolicy: UnmatchedTrafficPolicy.direct,
+      blobs: {},
+      rules: [],
+      endpointPolicies: [
+        StrategyEndpointPolicy(
+          id: 'telegram-remote-relay',
+          endpointClasses: ['telegram', 'telegram_host', 'mtproto_port'],
+          route: StrategyEndpointRoute(
+            kind: StrategyEndpointRouteKind.remoteRelay,
+            protocol: StrategyRelayProtocol.socks5,
+            host: 'relay.example.net',
+            port: 1080,
+            auth: StrategyRelayAuth(username: 'user', password: 'pass'),
+            connectTimeoutMs: 3000,
+            relayConnectTimeoutMs: 5000,
+            failureMode: StrategyEndpointFailureMode.failClosed,
+          ),
+        ),
+      ],
+    );
+
+    final roundtripped = StrategyProfile.fromMap(profile.toMap());
+    final policy = roundtripped.endpointPolicies.single;
+    final route = policy.route;
+
+    expect(policy.endpointClasses, [
+      'telegram',
+      'telegram_host',
+      'mtproto_port',
+    ]);
+    expect(policy.transport, StrategyEndpointTransport.tcp);
+    expect(route.kind, StrategyEndpointRouteKind.remoteRelay);
+    expect(route.protocol, StrategyRelayProtocol.socks5);
+    expect(route.host, 'relay.example.net');
+    expect(route.port, 1080);
+    expect(route.auth?.username, 'user');
+    expect(route.auth?.password, 'pass');
+    expect(route.failureMode, StrategyEndpointFailureMode.failClosed);
   });
 
   test('runtime snapshot parses Android VPN bridge payload', () {
@@ -83,6 +129,11 @@ void main() {
       'ipv6UdpForwarderReady': true,
       'tcpForwarderReady': false,
       'activeProfileName': 'Default lightweight',
+      'telegramCompatibilityProxyReady': true,
+      'telegramCompatibilitySetupRequired': true,
+      'telegramCompatibilityProxyEndpoint': '127.0.0.1:1443',
+      'telegramCompatibilityProxyMessage':
+          'Telegram compatibility proxy слушает 127.0.0.1:1443.',
     });
 
     expect(snapshot.platform, ProxyPlatform.android);
@@ -100,6 +151,13 @@ void main() {
     expect(snapshot.ipv6UdpForwarderReady, isTrue);
     expect(snapshot.tcpForwarderReady, isFalse);
     expect(snapshot.activeProfileName, 'Default lightweight');
+    expect(snapshot.telegramCompatibilityProxyReady, isTrue);
+    expect(snapshot.telegramCompatibilitySetupRequired, isTrue);
+    expect(snapshot.telegramCompatibilityProxyEndpoint, '127.0.0.1:1443');
+    expect(
+      snapshot.telegramCompatibilityProxyMessage,
+      'Telegram compatibility proxy слушает 127.0.0.1:1443.',
+    );
   });
 
   test('prepare result parses native response', () {

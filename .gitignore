@@ -46,3 +46,4 @@ app.*.map.json
 
 # Local research and backend reference sources
 /.sources/
+.codex

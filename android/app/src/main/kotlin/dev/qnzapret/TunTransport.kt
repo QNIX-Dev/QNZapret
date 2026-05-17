@@ -38,6 +38,11 @@ private data class TunForwarderCapabilities(
             tcpForwarderReady
 }
 
+private data class TunEstablishResult(
+    val descriptor: ParcelFileDescriptor,
+    val ipv6RouteEnabled: Boolean,
+)
+
 internal class TunTransport(
     private val service: VpnService,
 ) {
@@ -77,7 +82,7 @@ internal class TunTransport(
             )
         }
 
-        val nextDescriptor = establishTunnel(config)
+        val establishResult = establishTunnel(config)
             ?: return TunTransportState(
                 active = false,
                 forwarderReady = false,
@@ -89,6 +94,7 @@ internal class TunTransport(
                 message = "Android не вернул TUN fd для запрошенной VPN-сессии.",
             )
 
+        val nextDescriptor = establishResult.descriptor
         descriptor = nextDescriptor
         val nextConfigFile = writeTun2SocksConfig(config, proxyEndpoint)
         configFile = nextConfigFile
@@ -116,7 +122,8 @@ internal class TunTransport(
             ipv6UdpForwarderReady = capabilities.ipv6UdpForwarderReady,
             tcpForwarderReady = capabilities.tcpForwarderReady,
             message = "TUN fd передан в hev-socks5-tunnel для local SOCKS5 proxy " +
-                "${proxyEndpoint.host}:${proxyEndpoint.port}.",
+                "${proxyEndpoint.host}:${proxyEndpoint.port}. " +
+                "IPv6 route=${if (establishResult.ipv6RouteEnabled) "enabled" else "disabled"}.",
         )
     }
 
@@ -128,8 +135,11 @@ internal class TunTransport(
         configFile = null
     }
 
-    private fun establishTunnel(config: VpnRuntimeConfig): ParcelFileDescriptor? {
+    private fun establishTunnel(config: VpnRuntimeConfig): TunEstablishResult? {
         val selectedNetwork = UnderlyingNetworkSelector.select(service)
+        val ipv6RouteEnabled = selectedNetwork
+            ?.let { network -> UnderlyingNetworkSelector.supportsIpv6(service, network) }
+            ?: false
         val dnsServers = selectedNetwork
             ?.let { network -> UnderlyingNetworkSelector.resolveDnsServers(service, network) }
             .orEmpty()
@@ -138,9 +148,19 @@ internal class TunTransport(
             .setSession("QNZapret")
             .setMtu(config.tunnelMtu)
             .addAddress(TUN_IPV4_ADDRESS, TUN_IPV4_PREFIX_LENGTH)
-            .addAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX_LENGTH)
             .addRoute("0.0.0.0", 0)
-            .addRoute("::", 0)
+
+        if (ipv6RouteEnabled) {
+            builder
+                .addAddress(TUN_IPV6_ADDRESS, TUN_IPV6_PREFIX_LENGTH)
+                .addRoute("::", 0)
+        } else {
+            Log.d(
+                TUN_TRANSPORT_LOG_TAG,
+                "tun ipv6 route disabled reason=no_underlying_ipv6_route " +
+                    "underlying=${selectedNetwork ?: "-"}",
+            )
+        }
 
         dnsServers.forEach { dnsServer ->
             builder.addDnsServer(dnsServer.hostAddress ?: return@forEach)
@@ -161,10 +181,17 @@ internal class TunTransport(
         Log.d(
             TUN_TRANSPORT_LOG_TAG,
             "tun establish dns=${dnsServers.joinToString(",") { it.hostAddress ?: "-" }} " +
-                "underlying=${selectedNetwork ?: "-"}",
+                "underlying=${selectedNetwork ?: "-"} mtu=${config.tunnelMtu} " +
+                "ipv6Route=$ipv6RouteEnabled " +
+                selectedNetwork?.let { network -> UnderlyingNetworkSelector.describeLink(service, network) }.orEmpty(),
         )
 
-        return builder.establish()
+        return builder.establish()?.let { descriptor ->
+            TunEstablishResult(
+                descriptor = descriptor,
+                ipv6RouteEnabled = ipv6RouteEnabled,
+            )
+        }
     }
 
     private fun writeTun2SocksConfig(

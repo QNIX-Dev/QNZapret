@@ -43,7 +43,7 @@ Android-направление строится как no-root VPN/proxy runtime
 - frontend-friendly `ProxyRuntimeController` и barrel export `lib/core/backend/backend.dart`
 - composition helper `createDefaultProxyRuntime()`, который подключает Android adapter на Android и stub-адаптеры на desktop
 - Riverpod application layer в `lib/core/state/runtime_controller.dart`, который адаптирует `ProxyRuntimeSnapshot` в UI-состояния, CTA, status chips и локальные diagnostic logs
-- русские пользовательские подписи runtime-состояний, CTA, логов и Android foreground notification
+- русские пользовательские подписи runtime-состояний, CTA, логов, Android foreground notification со state text/actions остановки/перезапуска и native Quick Settings Tile для запуска/остановки
 - serializable strategy profile model для HTTP/TLS/QUIC правил
 - `UnmatchedTrafficPolicy.direct` для трафика вне hostlists: списки включают desync-обработку, а не ограничивают общий доступ
 - `StubProxyRuntime` для состояния, где нативный runtime еще не подключен
@@ -55,19 +55,22 @@ Android-направление строится как no-root VPN/proxy runtime
 - native strategy engine для HTTP/TLS/QUIC decisions, lazy hostlists, payload blobs и L7 detectors
 - QUIC host correlation в `QuicHostCorrelation.kt`: UDP/53 DNS A/AAAA responses и уже распознанный TCP HTTP/TLS host связываются с destination IP, чтобы UDP/443 QUIC Initial мог получить `knownHost`; дефолтный QUIC rule не зависит от `knownHost`, потому что Android Private DNS/DoT часто скрывает DNS path
 - IPv4/IPv6 UDP packet codec и TCP segment codec в `IpPacketCodec.kt`
-- локальный strategy SOCKS5 proxy в `StrategySocks5Server.kt`: принимает CONNECT и UDP_ASSOCIATE от `hev-socks5-tunnel`, применяет `StrategyRuntimeEngine`, TLS record split, best-effort TCP fake с малым hop limit, UDP fake для QUIC и открывает исходящие sockets через `VpnService.protect`
-- TUN lifecycle в `TunTransport.kt`: default-route поднимается дефолтным Android launch config при `establishTunnel=true`, собственный пакет приложения исключается из VPN, TUN получает DNS из выбранной underlying-сети и сообщает ее через `setUnderlyingNetworks`; TUN fd передается в MIT `hev-socks5-tunnel`, который маршрутизирует TCP/UDP в локальный strategy SOCKS5 proxy
+- локальный strategy SOCKS5 proxy в `StrategySocks5Server.kt`: принимает CONNECT и UDP_ASSOCIATE от `hev-socks5-tunnel`, применяет `StrategyRuntimeEngine`, TLS record split, best-effort TCP fake с малым hop limit, UDP fake для QUIC, открывает исходящие sockets через `VpnService.protect`, логирует TCP/UDP timing, помечает Telegram endpoint candidates, выбирает `endpointPolicies` remote relay для Telegram до direct connect и сохраняет bounded Telegram pre-connect fallback для диагностики без relay
+- remote relay/proxy маршрут для Telegram в `docs/android_telegram_remote_relay_contract.md`: текущий runtime поддерживает SOCKS5 remote relay через `StrategyProfile.endpointPolicies`, чтобы прозрачный VPN-перехват мог прокинуть Telegram DC TCP stream без ручной настройки proxy в приложении Telegram; HTTPS CONNECT и production secret storage остаются TODO
+- Telegram compatibility mode без Go-core/JNA: локальный Kotlin MTProxy endpoint `127.0.0.1:1443`, открытие Telegram proxy confirmation screen, clean-room WSS `/apiws` transport, Cloudflare route candidates из локального `telegram_compat.json` и public MIT Flowseal upstream defaults, DNS fallback, fetch/decode/cache route-provider, active-domain/cooldown, EWMA route scoring и one-shot WSS pool для ускорения повторных text/media sessions
+- TUN lifecycle в `TunTransport.kt`: default-route поднимается дефолтным Android launch config при `establishTunnel=true`, собственный пакет приложения исключается из VPN, TUN получает DNS из выбранной underlying-сети и сообщает ее через `setUnderlyingNetworks`; TUN fd передается в MIT `hev-socks5-tunnel`, который маршрутизирует TCP/UDP в локальный strategy SOCKS5 proxy. IPv6 route добавляется только если selected underlying network реально имеет usable IPv6 address и default IPv6 route.
+- controlled Android network self-test в `AndroidNetworkSelfTest.kt`: из процесса приложения логирует `QNZapretNetTest` до старта runtime/TUN и после старта TUN, проверяя plain/protected/bound TCP и protected/bound UDP DNS probe для диагностики UID/app-network blocker
 - Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
 - Android launcher icons через adaptive icon resources и desktop/window icons для Linux/Windows
 - базовые тесты сериализации и парсинга runtime-моделей
-- Android JVM unit tests для TCP relay state, IPv4/IPv6 TCP packet codec, TLS record split transform, QUIC host correlation и strategy engine QUIC decisions
+- Android JVM unit tests для TCP relay state, IPv4/IPv6 TCP packet codec, TLS record split transform, QUIC host correlation, strategy engine QUIC decisions, `StrategyProfile` endpoint policy codec и SOCKS5 relay client handshake
 - widget-тесты для home, settings и logs layout
 
 Что еще не подключено:
 
-- оставшийся hardening local SOCKS5 proxy: write backpressure, лимиты сессий, расширенная диагностика и Android device smoke при `establishTunnel=true`
+- оставшийся hardening local SOCKS5 proxy: write backpressure, лимиты сессий, counters contract для честной скорости в notification и Android device smoke при `establishTunnel=true`
 - raw TCP sequence/timestamp tricks в no-root socket mode; текущий TCP path безопасно применяет TLS record split для TLS, best-effort stream split для остальных TCP payload и пробует TCP fake только как low-hop-limit socket write с безопасным пропуском при недоступной TTL/hop-limit опции
 - расширенная QUIC correlation для DoH/DoT, DNS cache misses и более сложных multi-IP сценариев; базовый UDP/53 + TCP HTTP/TLS correlation уже подключен
 - production поток логов из backend; текущий экран логов уже показывает application/runtime-controller events, но еще не читает native log stream

@@ -24,6 +24,10 @@ internal object QnzapretVpnRuntimeStore {
     private var ipv6UdpForwarderReady: Boolean = false
     private var tcpForwarderReady: Boolean = false
     private var activeProfileName: String = ""
+    private var telegramCompatibilityProxyReady: Boolean = false
+    private var telegramCompatibilitySetupRequired: Boolean = false
+    private var telegramCompatibilityProxyEndpoint: String = ""
+    private var telegramCompatibilityProxyMessage: String = ""
 
     @Synchronized
     fun snapshot(context: Context): Map<String, Any> {
@@ -48,6 +52,10 @@ internal object QnzapretVpnRuntimeStore {
             "ipv6UdpForwarderReady" to ipv6UdpForwarderReady,
             "tcpForwarderReady" to tcpForwarderReady,
             "activeProfileName" to activeProfileName,
+            "telegramCompatibilityProxyReady" to telegramCompatibilityProxyReady,
+            "telegramCompatibilitySetupRequired" to telegramCompatibilitySetupRequired,
+            "telegramCompatibilityProxyEndpoint" to telegramCompatibilityProxyEndpoint,
+            "telegramCompatibilityProxyMessage" to telegramCompatibilityProxyMessage,
         )
     }
 
@@ -85,6 +93,10 @@ internal object QnzapretVpnRuntimeStore {
         newIpv6UdpForwarderReady: Boolean = false,
         newTcpForwarderReady: Boolean = false,
         newActiveProfileName: String = "",
+        newTelegramCompatibilityProxyReady: Boolean = false,
+        newTelegramCompatibilitySetupRequired: Boolean = false,
+        newTelegramCompatibilityProxyEndpoint: String = "",
+        newTelegramCompatibilityProxyMessage: String = "",
     ) {
         state = RuntimeState.RUNNING
         serviceActive = true
@@ -97,7 +109,27 @@ internal object QnzapretVpnRuntimeStore {
         ipv6UdpForwarderReady = newIpv6UdpForwarderReady
         tcpForwarderReady = newTcpForwarderReady
         activeProfileName = newActiveProfileName
+        telegramCompatibilityProxyReady = newTelegramCompatibilityProxyReady
+        telegramCompatibilitySetupRequired = newTelegramCompatibilitySetupRequired
+        telegramCompatibilityProxyEndpoint = newTelegramCompatibilityProxyEndpoint
+        telegramCompatibilityProxyMessage = newTelegramCompatibilityProxyMessage
         message = newMessage
+    }
+
+    @Synchronized
+    fun updateTelegramCompatibility(
+        ready: Boolean,
+        setupRequired: Boolean,
+        endpoint: String,
+        telegramMessage: String,
+    ) {
+        if (state != RuntimeState.RUNNING && state != RuntimeState.STARTING) {
+            return
+        }
+        telegramCompatibilityProxyReady = ready
+        telegramCompatibilitySetupRequired = setupRequired
+        telegramCompatibilityProxyEndpoint = endpoint
+        telegramCompatibilityProxyMessage = telegramMessage
     }
 
     @Synchronized
@@ -143,6 +175,10 @@ internal object QnzapretVpnRuntimeStore {
         ipv6UdpForwarderReady = false
         tcpForwarderReady = false
         activeProfileName = ""
+        telegramCompatibilityProxyReady = false
+        telegramCompatibilitySetupRequired = false
+        telegramCompatibilityProxyEndpoint = ""
+        telegramCompatibilityProxyMessage = ""
     }
 
     private enum class RuntimeState(val wireValue: String) {
