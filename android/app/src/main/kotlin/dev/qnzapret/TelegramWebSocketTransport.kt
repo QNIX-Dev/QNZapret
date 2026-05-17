@@ -162,15 +162,14 @@ internal object TelegramWebSocketTransport {
             }
         }
         if (errorCode == "low_upload_ack") {
-            connection.cfDomain?.let { domain ->
-                cfCooldownUntilMs[domain] = SystemClock.elapsedRealtime() + UPLOAD_ACK_COOLDOWN_MS
-                Log.d(
-                    LOG_TAG,
-                    "telegram cf upload cooldown domain=$domain reason=low_upload_ack " +
-                        "durationMs=$durationMs bytesUp=$bytesUp bytesDown=$bytesDown " +
-                        "cooldownMs=$UPLOAD_ACK_COOLDOWN_MS",
-                )
-            }
+            cfHostCooldownUntilMs[connection.host] = SystemClock.elapsedRealtime() + UPLOAD_ACK_COOLDOWN_MS
+            Log.d(
+                LOG_TAG,
+                "telegram cf upload cooldown host=${connection.host} " +
+                    "domain=${connection.cfDomain ?: "-"} reason=low_upload_ack " +
+                    "durationMs=$durationMs bytesUp=$bytesUp bytesDown=$bytesDown " +
+                    "cooldownMs=$UPLOAD_ACK_COOLDOWN_MS",
+            )
         }
         val throughputBps = ((bytesUp + bytesDown) * 1000.0) / durationMs.toDouble()
         scoreFor(connection.host, connection.mediaDc)
@@ -215,8 +214,13 @@ internal object TelegramWebSocketTransport {
         cfCooldownUntilMs.clear()
         mediaCfCooldownUntilMs.clear()
         directRouteCooldownUntilMs.clear()
+        cfHostCooldownUntilMs.clear()
         routeScores.clear()
         closePool()
+    }
+
+    internal fun setCfHostCooldownForTest(host: String, untilMs: Long) {
+        cfHostCooldownUntilMs[host] = untilMs
     }
 
     internal fun recordRouteFailureForTest(host: String, mediaDc: Boolean, errorCode: String) {
@@ -622,7 +626,7 @@ internal object TelegramWebSocketTransport {
                 sourceTier = 0,
                 active = domain == activeDomain,
             )
-        }.sortByRouteScore(mediaDc)
+        }.filterAvailableHosts(nowMs).sortByRouteScore(mediaDc)
         val cfPublic = publicDomains.filterAvailableDomains(mediaDc, nowMs).flatMap { domain ->
             cloudflareCandidates(
                 dcId = dcId,
@@ -630,7 +634,7 @@ internal object TelegramWebSocketTransport {
                 sourceTier = 1,
                 active = domain == activeDomain,
             )
-        }.sortByRouteScore(mediaDc)
+        }.filterAvailableHosts(nowMs).sortByRouteScore(mediaDc)
         val cf = if (mediaDc) cfLocal + direct + cfPublic else cfLocal + cfPublic
         return if (mediaDc) {
             if (routeConfig.cfPriority) cf else direct + cfLocal + cfPublic
@@ -681,6 +685,25 @@ internal object TelegramWebSocketTransport {
                     LOG_TAG,
                     "telegram cf route cooldown domain=$domain mediaDc=$mediaDc remainingMs=$remainingMs",
                 )
+            }
+            available
+        }
+    }
+
+    private fun List<TelegramWebSocketRouteCandidate>.filterAvailableHosts(
+        nowMs: Long,
+    ): List<TelegramWebSocketRouteCandidate> {
+        return filter { candidate ->
+            val cooldownUntil = cfHostCooldownUntilMs[candidate.host] ?: 0L
+            val available = cooldownUntil <= nowMs
+            if (!available) {
+                runCatching {
+                    Log.d(
+                        LOG_TAG,
+                        "telegram cf route cooldown host=${candidate.host} " +
+                            "domain=${candidate.cfDomain ?: "-"} remainingMs=${cooldownUntil - nowMs}",
+                    )
+                }
             }
             available
         }
@@ -914,6 +937,7 @@ internal object TelegramWebSocketTransport {
     private val cfCooldownUntilMs = ConcurrentHashMap<String, Long>()
     private val mediaCfCooldownUntilMs = ConcurrentHashMap<String, Long>()
     private val directRouteCooldownUntilMs = ConcurrentHashMap<String, Long>()
+    private val cfHostCooldownUntilMs = ConcurrentHashMap<String, Long>()
     private val routeScores = ConcurrentHashMap<String, TelegramRouteScore>()
     private val poolLock = Any()
     private val wsPool = LinkedHashMap<TelegramWebSocketPoolKey, ArrayDeque<TelegramWebSocketPoolEntry>>()

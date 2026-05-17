@@ -101,6 +101,24 @@ class TelegramWebSocketTransportTest {
     }
 
     @Test
+    fun uploadAckCooldownSkipsOnlyFailedCloudflareHost() {
+        TelegramWebSocketTransport.setCfHostCooldownForTest(
+            host = "kws2.local.example",
+            untilMs = 60_000L,
+        )
+
+        val hosts = TelegramWebSocketTransport.routeHostsForTest(
+            dcId = 2,
+            mediaDc = true,
+            cfDomains = listOf("local.example"),
+            localDomainCount = 1,
+        )
+
+        assertEquals("kws2-1.local.example", hosts[0])
+        assertEquals("kws2-1.web.telegram.org", hosts[1])
+    }
+
+    @Test
     fun lowThroughputMediaSessionIsScoredAsFailure() {
         val outcome = TelegramWebSocketTransport.classifySessionResultForTest(
             mediaDc = true,
