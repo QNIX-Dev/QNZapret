@@ -67,9 +67,16 @@ internal object TelegramWebSocketTransport {
         routeConfig: TelegramWebSocketRouteConfig = TelegramWebSocketRouteConfig(),
         timeoutMs: Int = CONNECT_TIMEOUT_MS,
         usePool: Boolean = true,
+        strategyProxyEndpoint: LocalStrategyProxyEndpoint? = null,
     ): TelegramWebSocketConnection {
         val prefs = service.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val candidates = routeCandidates(dcId, mediaDc, routeConfig, prefs)
+        val candidates = routeCandidates(
+            dcId = dcId,
+            mediaDc = mediaDc,
+            routeConfig = routeConfig,
+            activeDomain = readActiveDomain(prefs, routeConfig),
+            nowMs = SystemClock.elapsedRealtime(),
+        )
         val startedAtMs = SystemClock.elapsedRealtime()
         Log.d(
             LOG_TAG,
@@ -91,7 +98,7 @@ internal object TelegramWebSocketTransport {
                         "host=${pooled.host} route=${pooled.routeKind} idleMs=${SystemClock.elapsedRealtime() - pooled.connectedAtMs}",
                 )
                 if (candidate != null) {
-                    schedulePoolRefill(service, candidate, dcId, mediaDc, routeConfig, timeoutMs)
+                    schedulePoolRefill(service, candidate, dcId, mediaDc, routeConfig, timeoutMs, strategyProxyEndpoint)
                 }
                 return pooled.copy(
                     connectedAtMs = SystemClock.elapsedRealtime(),
@@ -114,6 +121,7 @@ internal object TelegramWebSocketTransport {
             timeoutMs = timeoutMs,
             startedAtMs = startedAtMs,
             refillAfterSuccess = usePool,
+            strategyProxyEndpoint = strategyProxyEndpoint,
         )
     }
 
@@ -135,14 +143,101 @@ internal object TelegramWebSocketTransport {
         if (connection.host.isBlank() || durationMs <= 0L) {
             return
         }
+        val outcome = classifySessionResult(
+            mediaDc = connection.mediaDc,
+            bytesUp = bytesUp,
+            bytesDown = bytesDown,
+            durationMs = durationMs,
+            success = success,
+            errorCode = errorCode,
+        )
+        if (outcome.lowThroughput) {
+            connection.cfDomain?.let { domain ->
+                mediaCfCooldownUntilMs[domain] = SystemClock.elapsedRealtime() + MEDIA_LOW_THROUGHPUT_COOLDOWN_MS
+                Log.d(
+                    LOG_TAG,
+                    "telegram cf media cooldown domain=$domain reason=low_throughput " +
+                        "durationMs=$durationMs bytesUp=$bytesUp bytesDown=$bytesDown",
+                )
+            }
+        }
+        if (errorCode == "low_upload_ack") {
+            connection.cfDomain?.let { domain ->
+                cfCooldownUntilMs[domain] = SystemClock.elapsedRealtime() + UPLOAD_ACK_COOLDOWN_MS
+                Log.d(
+                    LOG_TAG,
+                    "telegram cf upload cooldown domain=$domain reason=low_upload_ack " +
+                        "durationMs=$durationMs bytesUp=$bytesUp bytesDown=$bytesDown " +
+                        "cooldownMs=$UPLOAD_ACK_COOLDOWN_MS",
+                )
+            }
+        }
         val throughputBps = ((bytesUp + bytesDown) * 1000.0) / durationMs.toDouble()
         scoreFor(connection.host, connection.mediaDc)
-            .recordSession(throughputBps = throughputBps, success = success, errorCode = errorCode)
+            .recordSession(
+                throughputBps = throughputBps,
+                success = outcome.success,
+                errorCode = outcome.errorCode,
+            )
         Log.d(
             LOG_TAG,
             "telegram route score update host=${connection.host} mediaDc=${connection.mediaDc} " +
-                "success=$success errorCode=$errorCode durationMs=$durationMs " +
+                "success=${outcome.success} errorCode=${outcome.errorCode} " +
+                "lowThroughput=${outcome.lowThroughput} durationMs=$durationMs " +
                 "bytesUp=$bytesUp bytesDown=$bytesDown throughputBps=${throughputBps.toLong()}",
+        )
+    }
+
+    internal fun routeHostsForTest(
+        dcId: Int,
+        mediaDc: Boolean,
+        cfDomains: List<String>,
+        activeDomain: String? = null,
+        localDomainCount: Int = cfDomains.size,
+    ): List<String> {
+        return routeCandidates(
+            dcId = dcId,
+            mediaDc = mediaDc,
+            routeConfig = TelegramWebSocketRouteConfig(
+                cfDomains = cfDomains,
+                localDomainCount = localDomainCount,
+            ),
+            activeDomain = activeDomain,
+            nowMs = 0L,
+        ).map { candidate -> candidate.host }
+    }
+
+    internal fun setDirectRouteCooldownForTest(dcId: Int, mediaDc: Boolean, untilMs: Long) {
+        directRouteCooldownUntilMs[directCooldownKey(dcId, mediaDc)] = untilMs
+    }
+
+    internal fun clearRouteStateForTest() {
+        cfCooldownUntilMs.clear()
+        mediaCfCooldownUntilMs.clear()
+        directRouteCooldownUntilMs.clear()
+        routeScores.clear()
+        closePool()
+    }
+
+    internal fun recordRouteFailureForTest(host: String, mediaDc: Boolean, errorCode: String) {
+        scoreFor(host, mediaDc).recordFailure(errorCode)
+    }
+
+    internal fun classifySessionResultForTest(
+        mediaDc: Boolean,
+        bytesUp: Long,
+        bytesDown: Long,
+        durationMs: Long,
+        success: Boolean,
+        errorCode: String,
+    ): TelegramRouteSessionOutcome {
+        return classifySessionResult(
+            mediaDc = mediaDc,
+            bytesUp = bytesUp,
+            bytesDown = bytesDown,
+            durationMs = durationMs,
+            success = success,
+            errorCode = errorCode,
         )
     }
 
@@ -168,11 +263,20 @@ internal object TelegramWebSocketTransport {
         timeoutMs: Int,
         startedAtMs: Long,
         refillAfterSuccess: Boolean,
+        strategyProxyEndpoint: LocalStrategyProxyEndpoint?,
     ): TelegramWebSocketConnection {
         val resolver = TelegramCloudflareResolver(service)
         var lastError: IOException? = null
         for ((index, candidate) in candidates.withIndex()) {
             val attemptStartedAtMs = SystemClock.elapsedRealtime()
+            if (candidate.isDirectRoute && directRouteCooldownRemainingMs(dcId, mediaDc, attemptStartedAtMs) > 0L) {
+                Log.d(
+                    LOG_TAG,
+                    "telegram direct route cooldown dc=$dcId mediaDc=$mediaDc " +
+                        "host=${candidate.host} remainingMs=${directRouteCooldownRemainingMs(dcId, mediaDc, attemptStartedAtMs)}",
+                )
+                continue
+            }
             val network = UnderlyingNetworkSelector.select(service)
             val preferIpv4Only = network != null && !UnderlyingNetworkSelector.supportsIpv6(service, network)
             Log.d(
@@ -205,12 +309,13 @@ internal object TelegramWebSocketTransport {
                     mediaDc = mediaDc,
                     startedAtMs = startedAtMs,
                     dnsMs = dnsMs,
+                    strategyProxyEndpoint = strategyProxyEndpoint,
                 )
                 candidate.cfDomain?.let { domain ->
                     saveActiveDomain(service, domain)
                 }
                 if (refillAfterSuccess) {
-                    schedulePoolRefill(service, candidate, dcId, mediaDc, routeConfig, timeoutMs)
+                    schedulePoolRefill(service, candidate, dcId, mediaDc, routeConfig, timeoutMs, strategyProxyEndpoint)
                 }
                 return connection
             } catch (error: IOException) {
@@ -221,6 +326,15 @@ internal object TelegramWebSocketTransport {
                     candidate.cfDomain?.let { domain ->
                         cfCooldownUntilMs[domain] = SystemClock.elapsedRealtime() + CF_COOLDOWN_MS
                     }
+                }
+                if (mediaDc && candidate.isDirectRoute && errorCode in DIRECT_ROUTE_COOLDOWN_ERRORS) {
+                    val cooldownUntilMs = SystemClock.elapsedRealtime() + DIRECT_ROUTE_COOLDOWN_MS
+                    directRouteCooldownUntilMs[directCooldownKey(dcId, mediaDc)] = cooldownUntilMs
+                    Log.d(
+                        LOG_TAG,
+                        "telegram direct route cooldown set dc=$dcId mediaDc=$mediaDc " +
+                            "host=${candidate.host} reason=$errorCode cooldownMs=$DIRECT_ROUTE_COOLDOWN_MS",
+                    )
                 }
                 Log.d(
                     LOG_TAG,
@@ -244,7 +358,7 @@ internal object TelegramWebSocketTransport {
         timeoutMs: Int,
     ): TelegramRouteProbeResult {
         val normalizedDomain = domain.trim().trim('.').lowercase()
-        val candidates = cloudflareCandidates(dcId, mediaDc, normalizedDomain)
+        val candidates = cloudflareCandidates(dcId, normalizedDomain)
         val startedAtMs = SystemClock.elapsedRealtime()
         val resolver = TelegramCloudflareResolver(service)
         var lastError: IOException? = null
@@ -279,6 +393,7 @@ internal object TelegramWebSocketTransport {
                     mediaDc = mediaDc,
                     startedAtMs = startedAtMs,
                     dnsMs = dnsMs,
+                    strategyProxyEndpoint = null,
                 )
                 connection.stream.close()
                 saveActiveDomain(service, normalizedDomain)
@@ -330,6 +445,7 @@ internal object TelegramWebSocketTransport {
         mediaDc: Boolean,
         startedAtMs: Long,
         dnsMs: Long,
+        strategyProxyEndpoint: LocalStrategyProxyEndpoint?,
     ): TelegramWebSocketConnection {
         var lastError: IOException? = null
         for ((ipIndex, address) in resolved.take(MAX_IPS_PER_HOST).withIndex()) {
@@ -338,22 +454,35 @@ internal object TelegramWebSocketTransport {
             try {
                 rawSocket.tcpNoDelay = true
                 rawSocket.soTimeout = timeoutMs
-                if (!service.protect(rawSocket)) {
-                    throw IOException("VpnService.protect returned false")
-                }
-                network?.let { selectedNetwork ->
-                    try {
-                        selectedNetwork.bindSocket(rawSocket)
-                    } catch (error: IOException) {
-                        Log.d(
-                            LOG_TAG,
-                            "telegram cf network bind fallback host=${candidate.host} network=$selectedNetwork " +
-                                "error=${error.javaClass.simpleName}:${error.message ?: "-"}",
-                        )
+                val directStrategyProxyEndpoint = strategyProxyEndpoint?.takeIf { candidate.isDirectRoute }
+                val viaStrategyProxy = directStrategyProxyEndpoint != null
+                if (directStrategyProxyEndpoint != null) {
+                    connectViaStrategyProxy(
+                        service = service,
+                        socket = rawSocket,
+                        proxyEndpoint = directStrategyProxyEndpoint,
+                        targetHost = candidate.host,
+                        targetAddress = address,
+                        timeoutMs = timeoutMs,
+                    )
+                } else {
+                    if (!service.protect(rawSocket)) {
+                        throw IOException("VpnService.protect returned false")
                     }
+                    network?.let { selectedNetwork ->
+                        try {
+                            selectedNetwork.bindSocket(rawSocket)
+                        } catch (error: IOException) {
+                            Log.d(
+                                LOG_TAG,
+                                "telegram cf network bind fallback host=${candidate.host} network=$selectedNetwork " +
+                                    "error=${error.javaClass.simpleName}:${error.message ?: "-"}",
+                            )
+                        }
+                    }
+                    val endpoint = InetSocketAddress(address.address, HTTPS_PORT)
+                    rawSocket.connect(endpoint, timeoutMs)
                 }
-                val endpoint = InetSocketAddress(address.address, HTTPS_PORT)
-                rawSocket.connect(endpoint, timeoutMs)
                 val tcpConnectedAtMs = SystemClock.elapsedRealtime()
 
                 val sslSocket = (SSLSocketFactory.getDefault() as SSLSocketFactory)
@@ -369,6 +498,7 @@ internal object TelegramWebSocketTransport {
                 }
 
                 val openResult = TelegramWebSocketStream.open(sslSocket, candidate.host)
+                sslSocket.soTimeout = STREAM_READ_TIMEOUT_MS
                 val connectedAtMs = SystemClock.elapsedRealtime()
                 val tcpConnectMs = tcpConnectedAtMs - tcpStartedAtMs
                 val tlsMs = tlsHandshakeAtMs - tcpConnectedAtMs
@@ -383,6 +513,7 @@ internal object TelegramWebSocketTransport {
                     LOG_TAG,
                     "telegram cf route ok dc=$dcId mediaDc=$mediaDc host=${candidate.host} route=${candidate.kind} " +
                         "ip=${address.address.hostAddress} ipSource=${address.source} ipAttempt=${ipIndex + 1} " +
+                        "via=${if (viaStrategyProxy) "strategy_socks" else "protected_socket"} " +
                         "dnsMs=$dnsMs tcpConnectMs=$tcpConnectMs tlsMs=$tlsMs wsHandshakeMs=$wsHandshakeMs " +
                         "httpStatus=${openResult.statusCode} " +
                         "totalMs=${connectedAtMs - startedAtMs}",
@@ -417,66 +548,106 @@ internal object TelegramWebSocketTransport {
         throw lastError ?: UnknownHostException(candidate.host)
     }
 
+    private fun connectViaStrategyProxy(
+        service: VpnService,
+        socket: Socket,
+        proxyEndpoint: LocalStrategyProxyEndpoint,
+        targetHost: String,
+        targetAddress: TelegramResolvedAddress,
+        timeoutMs: Int,
+    ) {
+        if (!service.protect(socket)) {
+            throw IOException("VpnService.protect returned false")
+        }
+        socket.connect(InetSocketAddress(proxyEndpoint.host, proxyEndpoint.port), timeoutMs)
+        Socks5RelayClient.connect(
+            socket = socket,
+            target = Socks5RelayTarget(
+                host = targetAddress.address.hostAddress ?: targetHost,
+                port = HTTPS_PORT,
+                inetAddress = targetAddress.address,
+            ),
+            auth = null,
+            timeoutMs = timeoutMs,
+        )
+        socket.soTimeout = timeoutMs
+        Log.d(
+            LOG_TAG,
+            "telegram direct route via strategy proxy target=$targetHost " +
+                "ip=${targetAddress.address.hostAddress} proxy=${proxyEndpoint.host}:${proxyEndpoint.port}",
+        )
+    }
+
     private fun routeCandidates(
         dcId: Int,
         mediaDc: Boolean,
         routeConfig: TelegramWebSocketRouteConfig,
-        prefs: android.content.SharedPreferences,
+        activeDomain: String?,
+        nowMs: Long,
     ): List<TelegramWebSocketRouteCandidate> {
         if (dcId !in 1..5) {
             throw IOException("Unsupported Telegram DC id $dcId")
         }
-        val directPrimary = TelegramWebSocketRouteCandidate("kws$dcId.web.telegram.org", "direct_kws", sourceTier = 2)
-        val directAlt = TelegramWebSocketRouteCandidate("kws$dcId-1.web.telegram.org", "direct_kws_alt", sourceTier = 2)
-        val direct = if (mediaDc) {
+        val directPrimary = TelegramWebSocketRouteCandidate("kws$dcId.web.telegram.org", "direct_kws", sourceTier = 2, variantRank = 0)
+        val directAlt = TelegramWebSocketRouteCandidate("kws$dcId-1.web.telegram.org", "direct_kws_alt", sourceTier = 2, variantRank = 0)
+        val directCandidates = if (mediaDc) {
             listOf(
                 directAlt,
-                TelegramWebSocketRouteCandidate("${dcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2),
+                TelegramWebSocketRouteCandidate("${dcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2, variantRank = 1),
                 directPrimary,
             )
         } else {
             listOf(
                 directPrimary,
-                TelegramWebSocketRouteCandidate("${dcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2),
-                directAlt,
+                TelegramWebSocketRouteCandidate("${dcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2, variantRank = 1),
+                directAlt.copy(variantRank = 2),
             )
+        }
+        val direct = if (directRouteCooldownRemainingMs(dcId, mediaDc, nowMs) > 0L) {
+            emptyList()
+        } else {
+            directCandidates
         }
         val normalizedDomains = routeConfig.cfDomains
             .map { domain -> domain.trim().trim('.').lowercase() }
             .filter { domain -> domain.isNotEmpty() }
             .distinct()
-        val activeDomain = prefs.getString(KEY_ACTIVE_CF_DOMAIN, null)
-            ?.trim()
-            ?.trim('.')
-            ?.lowercase()
-            ?.takeIf { domain -> domain in normalizedDomains }
         val localLimit = routeConfig.localDomainCount.coerceIn(0, normalizedDomains.size)
         val localDomains = normalizedDomains.take(localLimit).orderDomains(activeDomain)
         val publicDomains = normalizedDomains.drop(localLimit).orderDomains(activeDomain)
-        val domains = (localDomains + publicDomains).filterAvailableDomains()
-        val cf = domains.flatMapIndexed { index, domain ->
-            val sourceTier = if (index < localDomains.size) 0 else 1
+        val cfLocal = localDomains.filterAvailableDomains(mediaDc, nowMs).flatMap { domain ->
             cloudflareCandidates(
                 dcId = dcId,
-                mediaDc = mediaDc,
                 domain = domain,
-                sourceTier = sourceTier,
+                sourceTier = 0,
                 active = domain == activeDomain,
             )
         }.sortByRouteScore(mediaDc)
-        return if (routeConfig.cfPriority) cf + direct else direct + cf
+        val cfPublic = publicDomains.filterAvailableDomains(mediaDc, nowMs).flatMap { domain ->
+            cloudflareCandidates(
+                dcId = dcId,
+                domain = domain,
+                sourceTier = 1,
+                active = domain == activeDomain,
+            )
+        }.sortByRouteScore(mediaDc)
+        val cf = if (mediaDc) cfLocal + direct + cfPublic else cfLocal + cfPublic
+        return if (mediaDc) {
+            if (routeConfig.cfPriority) cf else direct + cfLocal + cfPublic
+        } else {
+            if (routeConfig.cfPriority) cf + direct else direct + cf
+        }
     }
 
     private fun cloudflareCandidates(
         dcId: Int,
-        mediaDc: Boolean,
         domain: String,
         sourceTier: Int = 0,
         active: Boolean = false,
     ): List<TelegramWebSocketRouteCandidate> {
-        val primary = TelegramWebSocketRouteCandidate("kws$dcId.$domain", "cloudflare", domain, sourceTier, active)
-        val alt = TelegramWebSocketRouteCandidate("kws$dcId-1.$domain", "cloudflare_alt", domain, sourceTier, active)
-        return if (mediaDc) listOf(alt, primary) else listOf(primary, alt)
+        val primary = TelegramWebSocketRouteCandidate("kws$dcId.$domain", "cloudflare", domain, sourceTier, active, variantRank = 0)
+        val alt = TelegramWebSocketRouteCandidate("kws$dcId-1.$domain", "cloudflare_alt", domain, sourceTier, active, variantRank = 1)
+        return listOf(primary, alt)
     }
 
     private fun List<TelegramWebSocketRouteCandidate>.sortByRouteScore(
@@ -485,8 +656,9 @@ internal object TelegramWebSocketTransport {
         return mapIndexed { index, candidate -> IndexedRouteCandidate(index, candidate) }
             .sortedWith(
                 compareBy<IndexedRouteCandidate> { item -> item.candidate.sourceTier }
-                    .thenBy { item -> if (item.candidate.active) 0 else 1 }
+                    .thenBy { item -> item.candidate.variantRank }
                     .thenBy { item -> scoreFor(item.candidate.host, mediaDc).sortScore() }
+                    .thenBy { item -> if (item.candidate.active) 0 else 1 }
                     .thenBy { item -> item.index },
             )
             .map { item -> item.candidate }
@@ -498,19 +670,80 @@ internal object TelegramWebSocketTransport {
         return active + inactive
     }
 
-    private fun List<String>.filterAvailableDomains(): List<String> {
-        val now = SystemClock.elapsedRealtime()
+    private fun List<String>.filterAvailableDomains(mediaDc: Boolean, nowMs: Long): List<String> {
         return filter { domain ->
             val cooldownUntil = cfCooldownUntilMs[domain] ?: 0L
-            val available = cooldownUntil <= now
+            val mediaCooldownUntil = if (mediaDc) mediaCfCooldownUntilMs[domain] ?: 0L else 0L
+            val available = cooldownUntil <= nowMs && mediaCooldownUntil <= nowMs
             if (!available) {
+                val remainingMs = maxOf(cooldownUntil - nowMs, mediaCooldownUntil - nowMs)
                 Log.d(
                     LOG_TAG,
-                    "telegram cf route cooldown domain=$domain remainingMs=${cooldownUntil - now}",
+                    "telegram cf route cooldown domain=$domain mediaDc=$mediaDc remainingMs=$remainingMs",
                 )
             }
             available
         }
+    }
+
+    private fun directRouteCooldownRemainingMs(dcId: Int, mediaDc: Boolean, nowMs: Long): Long {
+        return (directRouteCooldownUntilMs[directCooldownKey(dcId, mediaDc)] ?: 0L) - nowMs
+    }
+
+    private fun directCooldownKey(dcId: Int, mediaDc: Boolean): String {
+        return "$dcId|$mediaDc"
+    }
+
+    private fun readActiveDomain(
+        prefs: android.content.SharedPreferences,
+        routeConfig: TelegramWebSocketRouteConfig,
+    ): String? {
+        val normalizedDomains = routeConfig.cfDomains
+            .map { domain -> domain.trim().trim('.').lowercase() }
+            .filter { domain -> domain.isNotEmpty() }
+            .distinct()
+        return prefs.getString(KEY_ACTIVE_CF_DOMAIN, null)
+            ?.trim()
+            ?.trim('.')
+            ?.lowercase()
+            ?.takeIf { domain -> domain in normalizedDomains }
+    }
+
+    private fun classifySessionResult(
+        mediaDc: Boolean,
+        bytesUp: Long,
+        bytesDown: Long,
+        durationMs: Long,
+        success: Boolean,
+        errorCode: String,
+    ): TelegramRouteSessionOutcome {
+        val progressBytes = maxOf(bytesUp, bytesDown)
+        val lowThroughput = mediaDc && (
+            errorCode == "low_media_throughput" ||
+                (
+                    success &&
+                        durationMs >= MEDIA_LOW_THROUGHPUT_MIN_DURATION_MS &&
+                        progressBytes < MEDIA_LOW_THROUGHPUT_MIN_PROGRESS_BYTES &&
+                        progressBps(progressBytes, durationMs) < MEDIA_LOW_THROUGHPUT_PROGRESS_BPS
+                    )
+            )
+        return if (lowThroughput) {
+            TelegramRouteSessionOutcome(
+                success = false,
+                errorCode = "low_media_throughput",
+                lowThroughput = true,
+            )
+        } else {
+            TelegramRouteSessionOutcome(
+                success = success,
+                errorCode = errorCode,
+                lowThroughput = false,
+            )
+        }
+    }
+
+    private fun progressBps(progressBytes: Long, durationMs: Long): Long {
+        return (progressBytes * 1000L) / durationMs.coerceAtLeast(1L)
     }
 
     private fun IOException.routeErrorCode(): String {
@@ -582,6 +815,7 @@ internal object TelegramWebSocketTransport {
         mediaDc: Boolean,
         routeConfig: TelegramWebSocketRouteConfig,
         timeoutMs: Int,
+        strategyProxyEndpoint: LocalStrategyProxyEndpoint?,
     ) {
         val key = TelegramWebSocketPoolKey(dcId, mediaDc, candidate.host)
         val epoch = poolEpoch.get()
@@ -607,6 +841,7 @@ internal object TelegramWebSocketTransport {
                     timeoutMs = timeoutMs,
                     startedAtMs = startedAtMs,
                     refillAfterSuccess = false,
+                    strategyProxyEndpoint = strategyProxyEndpoint,
                 )
                 val added = synchronized(poolLock) {
                     if (poolEpoch.get() != epoch ||
@@ -659,16 +894,26 @@ internal object TelegramWebSocketTransport {
     private const val LOG_TAG = "QNZapretTgCompat"
     private const val HTTPS_PORT = 443
     private const val CONNECT_TIMEOUT_MS = 5_000
+    private const val STREAM_READ_TIMEOUT_MS = 0
     private const val DNS_TIMEOUT_MS = 1_500
     private const val MAX_IPS_PER_HOST = 2
     private const val CF_COOLDOWN_MS = 45_000L
+    private const val UPLOAD_ACK_COOLDOWN_MS = 5 * 60 * 1000L
+    private const val MEDIA_LOW_THROUGHPUT_COOLDOWN_MS = 60_000L
+    private const val MEDIA_LOW_THROUGHPUT_MIN_DURATION_MS = 10_000L
+    private const val MEDIA_LOW_THROUGHPUT_MIN_PROGRESS_BYTES = 128 * 1024L
+    private const val MEDIA_LOW_THROUGHPUT_PROGRESS_BPS = 8 * 1024L
+    private const val DIRECT_ROUTE_COOLDOWN_MS = 60_000L
     private const val WS_POOL_SIZE_PER_KEY = 2
     private const val WS_POOL_MAX_TOTAL = 4
     private const val WS_POOL_MAX_IDLE_MS = 60_000L
     private const val PREFS_NAME = "telegram_compatibility_proxy"
     private const val KEY_ACTIVE_CF_DOMAIN = "active_cf_domain"
+    private val DIRECT_ROUTE_COOLDOWN_ERRORS = setOf("timeout", "dns_failed", "tls_failed", "ws_failed")
 
     private val cfCooldownUntilMs = ConcurrentHashMap<String, Long>()
+    private val mediaCfCooldownUntilMs = ConcurrentHashMap<String, Long>()
+    private val directRouteCooldownUntilMs = ConcurrentHashMap<String, Long>()
     private val routeScores = ConcurrentHashMap<String, TelegramRouteScore>()
     private val poolLock = Any()
     private val wsPool = LinkedHashMap<TelegramWebSocketPoolKey, ArrayDeque<TelegramWebSocketPoolEntry>>()
@@ -684,7 +929,11 @@ private data class TelegramWebSocketRouteCandidate(
     val cfDomain: String? = null,
     val sourceTier: Int = 0,
     val active: Boolean = false,
-)
+    val variantRank: Int = 0,
+) {
+    val isDirectRoute: Boolean
+        get() = kind.startsWith("direct_")
+}
 
 private data class IndexedRouteCandidate(
     val index: Int,
@@ -700,6 +949,12 @@ private data class TelegramWebSocketPoolKey(
 private data class TelegramWebSocketPoolEntry(
     val connection: TelegramWebSocketConnection,
     val createdAtMs: Long,
+)
+
+internal data class TelegramRouteSessionOutcome(
+    val success: Boolean,
+    val errorCode: String,
+    val lowThroughput: Boolean,
 )
 
 private class TelegramRouteScore {

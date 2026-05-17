@@ -21,6 +21,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 internal data class TelegramCompatibilityProxyState(
     val ready: Boolean,
@@ -39,6 +40,7 @@ internal data class TelegramCompatibilityProxyState(
 
 internal class TelegramCompatibilityProxyManager(
     private val service: VpnService,
+    private val strategyProxyProvider: () -> LocalStrategyProxyEndpoint? = { null },
     private val onStateChanged: (TelegramCompatibilityProxyState) -> Unit = {},
 ) {
     private val prefs = service.getSharedPreferences(TELEGRAM_COMPAT_PREFS_NAME, Context.MODE_PRIVATE)
@@ -86,6 +88,7 @@ internal class TelegramCompatibilityProxyManager(
             secretHex = secret,
             setupFingerprint = setupFingerprint,
             routeConfigProvider = routeProvider::currentConfig,
+            strategyProxyProvider = strategyProxyProvider,
             onSuccessfulHandshake = ::onSuccessfulHandshake,
             onSuccessfulBridge = ::onSuccessfulBridge,
         )
@@ -382,6 +385,7 @@ private class TelegramKotlinMtProxyServer(
     private val secretHex: String,
     val setupFingerprint: String,
     private val routeConfigProvider: () -> TelegramWebSocketRouteConfig,
+    private val strategyProxyProvider: () -> LocalStrategyProxyEndpoint?,
     private val onSuccessfulHandshake: (String) -> Unit,
     private val onSuccessfulBridge: (String) -> Unit,
 ) {
@@ -475,8 +479,9 @@ private class TelegramKotlinMtProxyServer(
         val startedAtMs = SystemClock.elapsedRealtime()
         var upstream: TelegramWebSocketConnection? = null
         var upstreamToClient: Future<*>? = null
+        var sessionWatchdog: Future<*>? = null
         var clientInitComplete = false
-        var closeReason = "client_closed"
+        val closeReason = AtomicReference("client_closed")
         var sessionMetrics: TelegramSessionMetrics? = null
         activeSessions.incrementAndGet()
         try {
@@ -502,16 +507,60 @@ private class TelegramKotlinMtProxyServer(
                     "proto=${handshake.protocol.wireValue}",
             )
 
+            var initialClientPayload: ByteArray? = null
+            var firstPayloadLogged = false
+            var routeMediaDc = handshake.mediaDc
+            val upstreamMediaDc = if (handshake.mediaDc) {
+                val fallbackRemainingMs = positiveMediaUpstreamFallbackRemainingMs(dcId, SystemClock.elapsedRealtime())
+                val usePositiveUpstream = fallbackRemainingMs > 0L
+                Log.d(
+                    LOG_TAG,
+                    "telegram compatibility media upstream mode session=$sessionId dc=$dcId " +
+                        "rawDc=${handshake.rawDcId} upstreamMediaDc=${!usePositiveUpstream} " +
+                    "fallbackRemainingMs=$fallbackRemainingMs",
+                )
+                !usePositiveUpstream
+            } else {
+                val fallbackRemainingMs = uploadNegativeUpstreamFallbackRemainingMs(
+                    dcId = dcId,
+                    nowMs = SystemClock.elapsedRealtime(),
+                )
+                if (fallbackRemainingMs > 0L) {
+                    val firstPayload = readFirstClientPayload(
+                        client = client,
+                        clientCipher = handshake.clientToProxyCipher,
+                        dcId = dcId,
+                        sessionMetrics = sessionMetrics,
+                        startedAtMs = startedAtMs,
+                    ) ?: return
+                    initialClientPayload = firstPayload
+                    firstPayloadLogged = true
+                    val useNegativeUpstream = firstPayload.size >= UPLOAD_FALLBACK_FIRST_CHUNK_BYTES
+                    routeMediaDc = useNegativeUpstream
+                    Log.d(
+                        LOG_TAG,
+                        "telegram compatibility upload upstream mode session=$sessionId dc=$dcId " +
+                            "rawDc=${handshake.rawDcId} upstreamMediaDc=$useNegativeUpstream " +
+                            "routeMediaDc=$routeMediaDc fallbackRemainingMs=$fallbackRemainingMs " +
+                            "firstPayloadBytes=${firstPayload.size}",
+                    )
+                    useNegativeUpstream
+                } else {
+                    false
+                }
+            }
             val obfuscation = TelegramMtProxyCrypto.createUpstream(
                 protocol = handshake.protocol,
                 dcId = dcId,
-                mediaDc = handshake.mediaDc,
+                mediaDc = upstreamMediaDc,
             )
+            val packetSplitter = TelegramMtProtoPacketSplitter(handshake.protocol)
             upstream = TelegramWebSocketTransport.connect(
                 service = service,
                 dcId = dcId,
-                mediaDc = handshake.mediaDc,
+                mediaDc = routeMediaDc,
                 routeConfig = routeConfigProvider(),
+                strategyProxyEndpoint = strategyProxyProvider(),
             )
             try {
                 upstream.stream.writeBinary(obfuscation.initPayload)
@@ -526,9 +575,10 @@ private class TelegramKotlinMtProxyServer(
                     upstream = TelegramWebSocketTransport.connect(
                         service = service,
                         dcId = dcId,
-                        mediaDc = handshake.mediaDc,
+                        mediaDc = routeMediaDc,
                         routeConfig = routeConfigProvider(),
                         usePool = false,
+                        strategyProxyEndpoint = strategyProxyProvider(),
                     )
                     upstream.stream.writeBinary(obfuscation.initPayload)
                 } else {
@@ -539,44 +589,63 @@ private class TelegramKotlinMtProxyServer(
             Log.d(
                 LOG_TAG,
                 "telegram compatibility bridge started session=$sessionId flow=$flowKind " +
-                    "dc=$dcId wsHost=${upstream.host} route=${upstream.routeKind} pooled=${upstream.pooled} " +
+                    "dc=$dcId upstreamMediaDc=$upstreamMediaDc " +
+                    "wsHost=${upstream.host} route=${upstream.routeKind} pooled=${upstream.pooled} " +
                     "dnsMs=${upstream.dnsMs} tcpConnectMs=${upstream.tcpConnectMs} " +
                     "tlsMs=${upstream.tlsMs} wsHandshakeMs=${upstream.wsHandshakeMs} " +
                     "connectMs=${upstream.connectedAtMs - startedAtMs}",
             )
             onSuccessfulBridge(setupFingerprint)
 
-            upstreamToClient = executor.submit {
-                relayUpstreamToClient(
-                    upstream = upstream.stream,
+            sessionWatchdog = executor.submit {
+                watchSession(
                     client = client,
-                    upstreamCipher = obfuscation.upstreamToProxyCipher,
-                    clientCipher = handshake.proxyToClientCipher,
-                    dcId = dcId,
-                    sessionMetrics = sessionMetrics,
+                    upstream = upstream.stream,
                     connection = upstream,
-                    startedAtMs = startedAtMs,
+                    sessionMetrics = sessionMetrics,
+                    closeReason = closeReason,
                 )
+            }
+            upstreamToClient = executor.submit {
+                try {
+                    relayUpstreamToClient(
+                        upstream = upstream.stream,
+                        client = client,
+                        upstreamCipher = obfuscation.upstreamToProxyCipher,
+                        clientCipher = handshake.proxyToClientCipher,
+                        dcId = dcId,
+                        sessionMetrics = sessionMetrics,
+                        connection = upstream,
+                        startedAtMs = startedAtMs,
+                    )
+                } catch (error: Exception) {
+                    closeReason.compareAndSet("client_closed", error.telegramCompatibilityErrorCode())
+                    closeQuietly(client)
+                }
             }
             relayClientToUpstream(
                 client = client,
                 upstream = upstream.stream,
                 clientCipher = handshake.clientToProxyCipher,
                 upstreamCipher = obfuscation.proxyToUpstreamCipher,
+                packetSplitter = packetSplitter,
+                initialDecryptedChunk = initialClientPayload,
+                firstPayloadAlreadyLogged = firstPayloadLogged,
                 dcId = dcId,
                 sessionMetrics = sessionMetrics,
                 startedAtMs = startedAtMs,
             )
         } catch (error: SocketTimeoutException) {
-            closeReason = if (clientInitComplete) "network_timeout" else "client_init_timeout"
+            val timeoutReason = if (clientInitComplete) "network_timeout" else "client_init_timeout"
+            closeReason.compareAndSet("client_closed", timeoutReason)
             Log.d(
                 LOG_TAG,
-                "telegram compatibility failed errorCode=${if (clientInitComplete) "network_timeout" else "client_init_timeout"} " +
+                "telegram compatibility failed errorCode=$timeoutReason " +
                     "session=$sessionId elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs} " +
                     "error=${error.javaClass.simpleName}:${error.message ?: "-"}",
             )
         } catch (error: Exception) {
-            closeReason = error.telegramCompatibilityErrorCode()
+            closeReason.compareAndSet("client_closed", error.telegramCompatibilityErrorCode())
             if (running.get()) {
                 logCompatibilityFailure(
                     error = error,
@@ -586,6 +655,7 @@ private class TelegramKotlinMtProxyServer(
             }
         } finally {
             upstreamToClient?.cancel(true)
+            sessionWatchdog?.cancel(true)
             closeQuietly(upstream?.stream)
             closeQuietly(client)
             closeables.remove(client)
@@ -599,18 +669,75 @@ private class TelegramKotlinMtProxyServer(
                         bytesUp = metrics.bytesUp.get(),
                         bytesDown = metrics.bytesDown.get(),
                         durationMs = durationMs,
-                        success = closeReason == "client_closed",
-                        errorCode = closeReason,
+                        success = closeReason.get() == "client_closed",
+                        errorCode = closeReason.get(),
                     )
                 }
                 Log.d(
                     LOG_TAG,
-                    "telegram compatibility session closed session=$sessionId " +
+                        "telegram compatibility session closed session=$sessionId " +
                         "dc=${metrics.dcId} rawDc=${metrics.rawDcId} mediaDc=${metrics.mediaDc} " +
-                        "reason=$closeReason durationMs=$durationMs " +
+                        "reason=${closeReason.get()} durationMs=$durationMs " +
                         "bytesUp=${metrics.bytesUp.get()} bytesDown=${metrics.bytesDown.get()}",
                 )
             }
+        }
+    }
+
+    private fun watchSession(
+        client: Socket,
+        upstream: TelegramWebSocketStream,
+        connection: TelegramWebSocketConnection,
+        sessionMetrics: TelegramSessionMetrics?,
+        closeReason: AtomicReference<String>,
+    ) {
+        val metrics = sessionMetrics ?: return
+        try {
+            while (running.get() && !Thread.currentThread().isInterrupted) {
+                Thread.sleep(MEDIA_WATCHDOG_INTERVAL_MS)
+                val nowMs = SystemClock.elapsedRealtime()
+                val mediaDecision = metrics.mediaStallDecision(nowMs)
+                if (mediaDecision != null) {
+                    closeReason.compareAndSet("client_closed", "low_media_throughput")
+                    mediaPositiveUpstreamFallbackUntilMs[metrics.dcId] =
+                        SystemClock.elapsedRealtime() + MEDIA_POSITIVE_UPSTREAM_FALLBACK_MS
+                    Log.d(
+                        LOG_TAG,
+                        "telegram compatibility media watchdog closing session=${metrics.sessionId} " +
+                            "dc=${metrics.dcId} rawDc=${metrics.rawDcId} host=${connection.host} " +
+                            "route=${connection.routeKind} reason=low_media_throughput " +
+                            "durationMs=${mediaDecision.durationMs} progressBps=${mediaDecision.progressBps} " +
+                            "bytesUp=${mediaDecision.bytesUp} bytesDown=${mediaDecision.bytesDown} " +
+                            "positiveUpstreamFallbackMs=$MEDIA_POSITIVE_UPSTREAM_FALLBACK_MS",
+                    )
+                    closeQuietly(upstream)
+                    closeQuietly(client)
+                    return
+                }
+                val uploadDecision = metrics.uploadAckStallDecision(nowMs)
+                if (uploadDecision != null) {
+                    closeReason.compareAndSet("client_closed", "low_upload_ack")
+                    if (!metrics.mediaDc) {
+                        uploadNegativeUpstreamFallbackUntilMs[metrics.dcId] =
+                            SystemClock.elapsedRealtime() + UPLOAD_NEGATIVE_UPSTREAM_FALLBACK_MS
+                    }
+                    Log.d(
+                        LOG_TAG,
+                        "telegram compatibility upload watchdog closing session=${metrics.sessionId} " +
+                            "dc=${metrics.dcId} rawDc=${metrics.rawDcId} mediaDc=${metrics.mediaDc} " +
+                            "host=${connection.host} route=${connection.routeKind} reason=low_upload_ack " +
+                            "durationMs=${uploadDecision.durationMs} recentUp=${uploadDecision.recentUp} " +
+                            "recentDown=${uploadDecision.recentDown} bytesUp=${uploadDecision.bytesUp} " +
+                            "bytesDown=${uploadDecision.bytesDown} " +
+                            "negativeUpstreamFallbackMs=$UPLOAD_NEGATIVE_UPSTREAM_FALLBACK_MS",
+                    )
+                    closeQuietly(upstream)
+                    closeQuietly(client)
+                    return
+                }
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
@@ -619,17 +746,30 @@ private class TelegramKotlinMtProxyServer(
         upstream: TelegramWebSocketStream,
         clientCipher: TelegramCtrCipher,
         upstreamCipher: TelegramCtrCipher,
+        packetSplitter: TelegramMtProtoPacketSplitter,
+        initialDecryptedChunk: ByteArray?,
+        firstPayloadAlreadyLogged: Boolean,
         dcId: Int,
         sessionMetrics: TelegramSessionMetrics?,
         startedAtMs: Long,
     ) {
         val input = client.getInputStream()
         val buffer = ByteArray(RELAY_BUFFER_SIZE)
-        var firstPayloadLogged = false
+        var firstPayloadLogged = firstPayloadAlreadyLogged
+        if (initialDecryptedChunk != null) {
+            writeClientPlainChunkToUpstream(
+                decrypted = initialDecryptedChunk,
+                upstream = upstream,
+                upstreamCipher = upstreamCipher,
+                packetSplitter = packetSplitter,
+                dcId = dcId,
+                sessionMetrics = sessionMetrics,
+            )
+        }
         while (running.get()) {
             val read = input.read(buffer)
             if (read < 0) {
-                return
+                break
             }
             if (read == 0) {
                 continue
@@ -644,11 +784,79 @@ private class TelegramKotlinMtProxyServer(
                         "bytes=${decrypted.size} elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}",
                 )
             }
-            val encrypted = upstreamCipher.transform(decrypted)
-            upstream.writeBinary(encrypted)
-            bytesUp.addAndGet(read.toLong())
-            sessionMetrics?.addUp(read.toLong())
+            writeClientPlainChunkToUpstream(
+                decrypted = decrypted,
+                upstream = upstream,
+                upstreamCipher = upstreamCipher,
+                packetSplitter = packetSplitter,
+                dcId = dcId,
+                sessionMetrics = sessionMetrics,
+            )
         }
+        val tail = packetSplitter.flush()
+        if (tail.isNotEmpty()) {
+            Log.d(
+                LOG_TAG,
+                "telegram compatibility mtproto splitter flush session=${sessionMetrics?.sessionId ?: "-"} " +
+                    "dc=$dcId bytes=${tail.size}",
+            )
+            upstream.writeBinary(tail)
+        }
+    }
+
+    private fun readFirstClientPayload(
+        client: Socket,
+        clientCipher: TelegramCtrCipher,
+        dcId: Int,
+        sessionMetrics: TelegramSessionMetrics?,
+        startedAtMs: Long,
+    ): ByteArray? {
+        val input = client.getInputStream()
+        val buffer = ByteArray(RELAY_BUFFER_SIZE)
+        while (running.get()) {
+            val read = input.read(buffer)
+            if (read < 0) {
+                return null
+            }
+            if (read == 0) {
+                continue
+            }
+            val decrypted = clientCipher.transform(buffer, read)
+            Log.d(
+                LOG_TAG,
+                "telegram compatibility first payload direction=client_to_ws " +
+                    "session=${sessionMetrics?.sessionId ?: "-"} dc=$dcId " +
+                    "bytes=${decrypted.size} elapsedMs=${SystemClock.elapsedRealtime() - startedAtMs}",
+            )
+            return decrypted
+        }
+        return null
+    }
+
+    private fun writeClientPlainChunkToUpstream(
+        decrypted: ByteArray,
+        upstream: TelegramWebSocketStream,
+        upstreamCipher: TelegramCtrCipher,
+        packetSplitter: TelegramMtProtoPacketSplitter,
+        dcId: Int,
+        sessionMetrics: TelegramSessionMetrics?,
+    ) {
+        if (decrypted.isEmpty()) {
+            return
+        }
+        val encrypted = upstreamCipher.transform(decrypted)
+        val frames = packetSplitter.split(decrypted, encrypted)
+        if (frames.size > 1 || (frames.isEmpty() && decrypted.size >= RELAY_BUFFER_SIZE)) {
+            Log.d(
+                LOG_TAG,
+                "telegram compatibility mtproto splitter session=${sessionMetrics?.sessionId ?: "-"} " +
+                    "dc=$dcId inputBytes=${decrypted.size} frames=${frames.size} " +
+                    "buffered=${packetSplitter.bufferedBytes}",
+            )
+        }
+        frames.forEach(upstream::writeBinary)
+        bytesUp.addAndGet(decrypted.size.toLong())
+        sessionMetrics?.addUp(decrypted.size.toLong())
     }
 
     private fun relayUpstreamToClient(
@@ -772,8 +980,23 @@ private class TelegramKotlinMtProxyServer(
         private const val CLIENT_INIT_TIMEOUT_MS = 10_000
         private const val TELEGRAM_OBFUSCATION_INIT_SIZE = 64
         private const val RELAY_BUFFER_SIZE = 32 * 1024
+        private const val SESSION_WATCHDOG_INTERVAL_MS = 1_000L
+        private const val MEDIA_WATCHDOG_INTERVAL_MS = SESSION_WATCHDOG_INTERVAL_MS
+        private const val MEDIA_POSITIVE_UPSTREAM_FALLBACK_MS = 5 * 60 * 1000L
+        private const val UPLOAD_NEGATIVE_UPSTREAM_FALLBACK_MS = 5 * 60 * 1000L
+        private const val UPLOAD_FALLBACK_FIRST_CHUNK_BYTES = RELAY_BUFFER_SIZE
         private const val HANDSHAKE_FAILURE_LOG_WINDOW_MS = 10_000L
         private const val HANDSHAKE_FAILURE_LOG_LIMIT = 8
+        private val mediaPositiveUpstreamFallbackUntilMs = ConcurrentHashMap<Int, Long>()
+        private val uploadNegativeUpstreamFallbackUntilMs = ConcurrentHashMap<Int, Long>()
+    }
+
+    private fun positiveMediaUpstreamFallbackRemainingMs(dcId: Int, nowMs: Long): Long {
+        return ((mediaPositiveUpstreamFallbackUntilMs[dcId] ?: 0L) - nowMs).coerceAtLeast(0L)
+    }
+
+    private fun uploadNegativeUpstreamFallbackRemainingMs(dcId: Int, nowMs: Long): Long {
+        return ((uploadNegativeUpstreamFallbackUntilMs[dcId] ?: 0L) - nowMs).coerceAtLeast(0L)
     }
 }
 
@@ -782,6 +1005,124 @@ private data class HandshakeFailureLogDecision(
     val sampleIndex: Int,
     val suppressedSummary: Int,
 )
+
+internal class TelegramMtProtoPacketSplitter(
+    private val protocol: TelegramMtProxyTransportProtocol,
+) {
+    var bufferedBytes: Int = 0
+        private set
+
+    private var plainBuffer = ByteArray(0)
+    private var encryptedBuffer = ByteArray(0)
+    private var disabled = false
+
+    @Synchronized
+    fun split(plainChunk: ByteArray, encryptedChunk: ByteArray): List<ByteArray> {
+        require(plainChunk.size == encryptedChunk.size) {
+            "Telegram MTProto splitter chunks must have equal sizes"
+        }
+        if (plainChunk.isEmpty()) {
+            return emptyList()
+        }
+        if (disabled) {
+            return listOf(encryptedChunk)
+        }
+
+        plainBuffer += plainChunk
+        encryptedBuffer += encryptedChunk
+        bufferedBytes = encryptedBuffer.size
+
+        val frames = mutableListOf<ByteArray>()
+        while (plainBuffer.isNotEmpty()) {
+            val packetLength = nextPacketLength(plainBuffer) ?: break
+            if (packetLength <= 0 || packetLength > MAX_PACKET_BYTES) {
+                disabled = true
+                frames += encryptedBuffer
+                clearBuffers()
+                break
+            }
+            if (encryptedBuffer.size < packetLength) {
+                break
+            }
+            frames += encryptedBuffer.copyOfRange(0, packetLength)
+            plainBuffer = plainBuffer.copyOfRange(packetLength, plainBuffer.size)
+            encryptedBuffer = encryptedBuffer.copyOfRange(packetLength, encryptedBuffer.size)
+            bufferedBytes = encryptedBuffer.size
+        }
+
+        return frames
+    }
+
+    @Synchronized
+    fun flush(): ByteArray {
+        val tail = encryptedBuffer
+        clearBuffers()
+        return tail
+    }
+
+    private fun clearBuffers() {
+        plainBuffer = ByteArray(0)
+        encryptedBuffer = ByteArray(0)
+        bufferedBytes = 0
+    }
+
+    private fun nextPacketLength(buffer: ByteArray): Int? {
+        return when (protocol) {
+            TelegramMtProxyTransportProtocol.ABRIDGED -> abridgedPacketLength(buffer)
+            TelegramMtProxyTransportProtocol.INTERMEDIATE,
+            TelegramMtProxyTransportProtocol.PADDED_INTERMEDIATE,
+            -> intermediatePacketLength(buffer)
+        }
+    }
+
+    private fun abridgedPacketLength(buffer: ByteArray): Int? {
+        val first = buffer[0].toInt() and 0x7f
+        val headerLength: Int
+        val payloadLength: Int
+        if (first == ABRIDGED_LONG_LENGTH_MARKER) {
+            if (buffer.size < 4) {
+                return null
+            }
+            payloadLength = (
+                (buffer[1].toInt() and BYTE_MASK) or
+                    ((buffer[2].toInt() and BYTE_MASK) shl 8) or
+                    ((buffer[3].toInt() and BYTE_MASK) shl 16)
+                ) * ABRIDGED_LENGTH_GRANULARITY
+            headerLength = 4
+        } else {
+            payloadLength = first * ABRIDGED_LENGTH_GRANULARITY
+            headerLength = 1
+        }
+        if (payloadLength <= 0) {
+            return 0
+        }
+        return headerLength + payloadLength
+    }
+
+    private fun intermediatePacketLength(buffer: ByteArray): Int? {
+        if (buffer.size < 4) {
+            return null
+        }
+        val payloadLength = (
+            (buffer[0].toInt() and BYTE_MASK) or
+                ((buffer[1].toInt() and BYTE_MASK) shl 8) or
+                ((buffer[2].toInt() and BYTE_MASK) shl 16) or
+                ((buffer[3].toInt() and BYTE_MASK) shl 24)
+            ) and INTERMEDIATE_LENGTH_MASK
+        if (payloadLength <= 0) {
+            return 0
+        }
+        return 4 + payloadLength
+    }
+
+    private companion object {
+        private const val BYTE_MASK = 0xff
+        private const val ABRIDGED_LONG_LENGTH_MARKER = 0x7f
+        private const val ABRIDGED_LENGTH_GRANULARITY = 4
+        private const val INTERMEDIATE_LENGTH_MASK = 0x7fffffff
+        private const val MAX_PACKET_BYTES = 8 * 1024 * 1024
+    }
+}
 
 private class TelegramSessionMetrics(
     val sessionId: Long,
@@ -795,6 +1136,12 @@ private class TelegramSessionMetrics(
     private var windowStartedAtMs = startedAtMs
     private var windowBytesUp = 0L
     private var windowBytesDown = 0L
+    private var watchdogCheckedAtMs = startedAtMs
+    private var watchdogBytesUp = 0L
+    private var watchdogBytesDown = 0L
+    private var uploadWatchdogCheckedAtMs = startedAtMs
+    private var uploadWatchdogBytesUp = 0L
+    private var uploadWatchdogBytesDown = 0L
 
     @Synchronized
     fun addUp(count: Long) {
@@ -813,7 +1160,8 @@ private class TelegramSessionMetrics(
     private fun maybeLogWindow() {
         val now = SystemClock.elapsedRealtime()
         val elapsedMs = now - windowStartedAtMs
-        if (elapsedMs < THROUGHPUT_WINDOW_MS) {
+        val windowMs = if (mediaDc) MEDIA_THROUGHPUT_WINDOW_MS else TEXT_THROUGHPUT_WINDOW_MS
+        if (elapsedMs < windowMs) {
             return
         }
         val upBps = (windowBytesUp * 1000L) / elapsedMs.coerceAtLeast(1L)
@@ -829,10 +1177,101 @@ private class TelegramSessionMetrics(
         windowBytesDown = 0L
     }
 
+    @Synchronized
+    fun mediaStallDecision(nowMs: Long): TelegramMediaStallDecision? {
+        if (!mediaDc) {
+            return null
+        }
+        val durationMs = nowMs - startedAtMs
+        if (durationMs < MEDIA_STALL_MIN_DURATION_MS) {
+            return null
+        }
+        val elapsedSinceCheckMs = nowMs - watchdogCheckedAtMs
+        if (elapsedSinceCheckMs < MEDIA_STALL_RECENT_WINDOW_MS) {
+            return null
+        }
+        val up = bytesUp.get()
+        val down = bytesDown.get()
+        val recentProgress = maxOf(up - watchdogBytesUp, down - watchdogBytesDown)
+        val progressBps = (recentProgress * 1000L) / elapsedSinceCheckMs.coerceAtLeast(1L)
+        if (recentProgress >= MEDIA_STALL_MIN_PROGRESS_BYTES || progressBps >= MEDIA_STALL_MIN_PROGRESS_BPS) {
+            watchdogCheckedAtMs = nowMs
+            watchdogBytesUp = up
+            watchdogBytesDown = down
+            return null
+        }
+        return TelegramMediaStallDecision(
+            durationMs = durationMs,
+            bytesUp = up,
+            bytesDown = down,
+            progressBps = progressBps,
+        )
+    }
+
+    @Synchronized
+    fun uploadAckStallDecision(nowMs: Long): TelegramUploadAckStallDecision? {
+        val durationMs = nowMs - startedAtMs
+        if (durationMs < UPLOAD_ACK_STALL_MIN_DURATION_MS) {
+            return null
+        }
+        val up = bytesUp.get()
+        val down = bytesDown.get()
+        if (up < UPLOAD_ACK_STALL_MIN_UP_BYTES || down >= UPLOAD_ACK_STALL_MAX_DOWN_BYTES) {
+            return null
+        }
+        val elapsedSinceCheckMs = nowMs - uploadWatchdogCheckedAtMs
+        if (elapsedSinceCheckMs < UPLOAD_ACK_STALL_RECENT_WINDOW_MS) {
+            return null
+        }
+        val recentUp = up - uploadWatchdogBytesUp
+        val recentDown = down - uploadWatchdogBytesDown
+        if (recentUp >= UPLOAD_ACK_STALL_MIN_RECENT_UP_BYTES ||
+            recentDown >= UPLOAD_ACK_STALL_MIN_RECENT_DOWN_BYTES
+        ) {
+            uploadWatchdogCheckedAtMs = nowMs
+            uploadWatchdogBytesUp = up
+            uploadWatchdogBytesDown = down
+            return null
+        }
+        return TelegramUploadAckStallDecision(
+            durationMs = durationMs,
+            bytesUp = up,
+            bytesDown = down,
+            recentUp = recentUp,
+            recentDown = recentDown,
+        )
+    }
+
     private companion object {
-        private const val THROUGHPUT_WINDOW_MS = 5_000L
+        private const val MEDIA_THROUGHPUT_WINDOW_MS = 1_000L
+        private const val TEXT_THROUGHPUT_WINDOW_MS = 5_000L
+        private const val MEDIA_STALL_MIN_DURATION_MS = 10_000L
+        private const val MEDIA_STALL_RECENT_WINDOW_MS = 5_000L
+        private const val MEDIA_STALL_MIN_PROGRESS_BYTES = 128 * 1024L
+        private const val MEDIA_STALL_MIN_PROGRESS_BPS = 8 * 1024L
+        private const val UPLOAD_ACK_STALL_MIN_DURATION_MS = 12_000L
+        private const val UPLOAD_ACK_STALL_RECENT_WINDOW_MS = 5_000L
+        private const val UPLOAD_ACK_STALL_MIN_UP_BYTES = 128 * 1024L
+        private const val UPLOAD_ACK_STALL_MAX_DOWN_BYTES = 8 * 1024L
+        private const val UPLOAD_ACK_STALL_MIN_RECENT_UP_BYTES = 32 * 1024L
+        private const val UPLOAD_ACK_STALL_MIN_RECENT_DOWN_BYTES = 1024L
     }
 }
+
+private data class TelegramMediaStallDecision(
+    val durationMs: Long,
+    val bytesUp: Long,
+    val bytesDown: Long,
+    val progressBps: Long,
+)
+
+private data class TelegramUploadAckStallDecision(
+    val durationMs: Long,
+    val bytesUp: Long,
+    val bytesDown: Long,
+    val recentUp: Long,
+    val recentDown: Long,
+)
 
 private fun InputStream.readBytesExact(length: Int): ByteArray {
     val buffer = ByteArray(length)

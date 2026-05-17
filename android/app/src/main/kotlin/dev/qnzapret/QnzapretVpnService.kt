@@ -16,6 +16,7 @@ class QnzapretVpnService : VpnService() {
     private var runtime: QnzapretAndroidRuntime? = null
     private var telegramCompatibilityProxy: TelegramCompatibilityProxyManager? = null
     private var lastConfig: VpnRuntimeConfig? = null
+    private var lastProxyEndpoint: LocalStrategyProxyEndpoint? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_OPEN_TELEGRAM_PROXY) {
@@ -60,6 +61,7 @@ class QnzapretVpnService : VpnService() {
         AndroidNetworkSelfTest.run(this, "pre_vpn_start")
         runtime?.stop()
         telegramCompatibilityProxy?.stop()
+        lastProxyEndpoint = null
         val startResult = try {
             QnzapretAndroidRuntime(this).also { runtime = it }.start(config)
         } catch (error: Exception) {
@@ -76,6 +78,7 @@ class QnzapretVpnService : VpnService() {
             stopSelf()
             return START_NOT_STICKY
         }
+        lastProxyEndpoint = startResult.proxyEndpoint
         val initialTelegramState = ensureTelegramCompatibilityProxyStarted()
         val telegramState =
             if (startOrigin == START_ORIGIN_UI &&
@@ -167,6 +170,7 @@ class QnzapretVpnService : VpnService() {
     private fun stopRuntime(message: String) {
         runtime?.stop()
         runtime = null
+        lastProxyEndpoint = null
         telegramCompatibilityProxy?.stop()
         telegramCompatibilityProxy = null
         QnzapretVpnRuntimeStore.markIdle(this, message)
@@ -302,7 +306,10 @@ class QnzapretVpnService : VpnService() {
         if (existing != null) {
             return existing
         }
-        val created = TelegramCompatibilityProxyManager(this@QnzapretVpnService) { state ->
+        val created = TelegramCompatibilityProxyManager(
+            service = this@QnzapretVpnService,
+            strategyProxyProvider = { lastProxyEndpoint },
+        ) { state ->
             updateNotification(NotificationState.ACTIVE, lastConfig, state)
         }
         telegramCompatibilityProxy = created
