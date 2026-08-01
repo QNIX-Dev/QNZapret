@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../motion/app_motion.dart';
 import '../../motion/app_scroll_behavior.dart';
+import '../../motion/app_scroll_motion.dart';
+import '../../motion/app_smooth_scroll.dart';
 import '../../state/runtime_view_models.dart';
 import '../design_tokens.dart';
 
@@ -19,7 +21,7 @@ class TerminalSurface extends StatelessWidget {
   });
 
   final List<RuntimeLogEntry> logs;
-  final ScrollController scrollController;
+  final AppScrollController scrollController;
   final bool autoScrollEnabled;
   final VoidCallback onClear;
   final VoidCallback onCopy;
@@ -27,6 +29,7 @@ class TerminalSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    scrollController.motionSignal = AppScrollMotionScope.maybeOf(context);
     final extras = context.appThemeExtras;
     final theme = Theme.of(context);
 

@@ -5,6 +5,11 @@ final class AppMotionDurations {
   static const Duration standard = Duration(milliseconds: 260);
   static const Duration slow = Duration(milliseconds: 420);
   static const Duration page = Duration(milliseconds: 560);
+  static const Duration ambientStarting = Duration(seconds: 7);
+  static const Duration ambientRunning = Duration(seconds: 11);
+  static const Duration ambientStopping = Duration(seconds: 20);
+  static const Duration ambientIdle = Duration(seconds: 24);
+  static const Duration ambientFailure = Duration(seconds: 28);
 }
 
 final class AppMotionCurves {

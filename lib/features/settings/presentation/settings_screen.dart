@@ -6,7 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../app/theme/app_theme.dart';
 import '../../../core/app_metadata.dart';
 import '../../../core/motion/app_motion.dart';
-import '../../../core/motion/app_scroll_behavior.dart';
+import '../../../core/motion/app_smooth_scroll.dart';
 import '../../../core/state/app_settings_controller.dart';
 import '../../../core/state/package_info_provider.dart';
 import '../../../core/ui/app_backdrop.dart';
@@ -181,8 +181,8 @@ class _SettingsPanel extends StatelessWidget {
         color: fullPage
             ? Colors.transparent
             : isPage
-            ? theme.colorScheme.surface.withValues(alpha: 0.94)
-            : theme.colorScheme.surface.withValues(alpha: 0.97),
+            ? extras.mainGlassSurface.withValues(alpha: 0.92)
+            : extras.mainGlassSurface.withValues(alpha: 0.96),
         borderRadius: BorderRadius.circular(fullPage ? 0 : AppRadii.lg),
         border: fullPage ? null : Border.all(color: extras.glassStroke),
         boxShadow: fullPage
@@ -245,14 +245,13 @@ class _SettingsPanel extends StatelessWidget {
                     ? 1.52
                     : 0.88;
 
-                return SingleChildScrollView(
+                return AppSmoothSingleChildScrollView(
                   padding: EdgeInsets.fromLTRB(
                     fullPage ? 0 : AppSpacing.lg,
                     0,
                     fullPage ? 0 : AppSpacing.lg,
                     AppSpacing.lg,
                   ),
-                  physics: appVerticalScrollPhysics,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [

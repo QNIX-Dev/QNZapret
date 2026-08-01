@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/app_metadata.dart';
 import '../../../core/backend/backend.dart';
-import '../../../core/motion/app_scroll_behavior.dart';
+import '../../../core/motion/app_smooth_scroll.dart';
 import '../../../core/state/runtime_controller.dart';
 import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/connected_flow_illustration.dart';
@@ -43,15 +43,14 @@ class HomeScreen extends ConsumerWidget {
             ? constraints.maxHeight - bottomInset
             : 0.0;
 
-        return SingleChildScrollView(
-          physics: appVerticalScrollPhysics,
+        return AppSmoothSingleChildScrollView(
           child: Column(
             children: [
               ConstrainedBox(
                 constraints: BoxConstraints(minHeight: heroMinHeight),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: context.appThemeExtras.glassSurface,
+                    color: context.appThemeExtras.mainGlassSurface,
                     borderRadius: BorderRadius.circular(heroRadius),
                     border: Border.all(
                       color: context.appThemeExtras.glassStroke,

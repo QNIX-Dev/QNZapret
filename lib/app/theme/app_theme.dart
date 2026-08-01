@@ -58,6 +58,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
     required this.accentGradient,
     required this.glowColor,
     required this.glassSurface,
+    required this.mainGlassSurface,
     required this.glassStroke,
     required this.navigationSurface,
     required this.navigationStroke,
@@ -82,6 +83,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
   final LinearGradient accentGradient;
   final Color glowColor;
   final Color glassSurface;
+  final Color mainGlassSurface;
   final Color glassStroke;
   final Color navigationSurface;
   final Color navigationStroke;
@@ -107,6 +109,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
     LinearGradient? accentGradient,
     Color? glowColor,
     Color? glassSurface,
+    Color? mainGlassSurface,
     Color? glassStroke,
     Color? navigationSurface,
     Color? navigationStroke,
@@ -131,6 +134,7 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
       accentGradient: accentGradient ?? this.accentGradient,
       glowColor: glowColor ?? this.glowColor,
       glassSurface: glassSurface ?? this.glassSurface,
+      mainGlassSurface: mainGlassSurface ?? this.mainGlassSurface,
       glassStroke: glassStroke ?? this.glassStroke,
       navigationSurface: navigationSurface ?? this.navigationSurface,
       navigationStroke: navigationStroke ?? this.navigationStroke,
@@ -174,6 +178,9 @@ class AppThemeExtras extends ThemeExtension<AppThemeExtras> {
       glowColor: Color.lerp(glowColor, other.glowColor, t) ?? glowColor,
       glassSurface:
           Color.lerp(glassSurface, other.glassSurface, t) ?? glassSurface,
+      mainGlassSurface:
+          Color.lerp(mainGlassSurface, other.mainGlassSurface, t) ??
+          mainGlassSurface,
       glassStroke: Color.lerp(glassStroke, other.glassStroke, t) ?? glassStroke,
       navigationSurface:
           Color.lerp(navigationSurface, other.navigationSurface, t) ??
@@ -501,6 +508,11 @@ final class AppTheme {
       ),
       glowColor: accent.withValues(alpha: isDark ? 0.36 : 0.22),
       glassSurface: _blend(Colors.white, surface, isDark ? 0.06 : 0.76),
+      mainGlassSurface: _blend(
+        Colors.white,
+        surface,
+        isDark ? 0.08 : 0.72,
+      ).withValues(alpha: isDark ? 0.88 : 0.84),
       glassStroke: _blend(accent, surface, isDark ? 0.22 : 0.1),
       navigationSurface: _blend(
         Colors.white,
