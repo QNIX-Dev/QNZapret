@@ -78,18 +78,20 @@ assets/
     logo/
       qnzapret_logo.png
 
+runtime/
+  assets/qnzapret/
+    bin/nfqws2
+    lists/
+    lua/
+    payloads/
+    manifest.sha256
+    provenance.json
+  telegram/flowseal/
+
 android/
   app/
     src/main/
       AndroidManifest.xml
-      assets/qnzapret/
-        lists/
-          list-general.txt
-          list-google.txt
-          list-user.txt
-        payloads/
-          quic_initial_www_google_com.bin
-          tls_clienthello_www_google_com.bin
       jni/
         Android.mk
         Application.mk
@@ -199,13 +201,15 @@ test/
   - `UnmatchedTrafficPolicy`
   - `ProxyRuntimeSnapshot`
   - `ProxyRuntime`
-  - `StubProxyRuntime`
+  - `LinuxProxyRuntime`
+  - `StubProxyRuntime` для пока не подключенных платформ
 - `android_proxy_runtime.dart`
   Android adapter поверх `MethodChannel`.
 - `proxy_runtime_controller.dart`
   Frontend-friendly controller над `ProxyRuntime`: хранит snapshot, busy/error state, default launch config и команды `initialize`, `prepare`, `start`, `stop`, `refresh`.
 - `proxy_runtime_factory.dart`
-  Composition helper, который выбирает Android adapter на Android и stub-реализации на desktop-платформах.
+  Composition helper, который выбирает Android adapter на Android,
+  Linux adapter на Linux и stub-реализацию на Windows.
 - `backend.dart`
   Barrel export для UI и application layer, чтобы фронтендеру не нужно было собирать backend imports по одному файлу.
 
@@ -286,7 +290,8 @@ test/
 - иллюстрацию connected flow
 
 Сейчас экран читает `runtimeControllerProvider`.
-На Android под ним работает `AndroidProxyRuntime`; на desktop-платформах пока остаются stub-адаптеры того же контракта.
+На Android под ним работает `AndroidProxyRuntime`, на Linux —
+`LinuxProxyRuntime`; на Windows пока остается stub-адаптер того же контракта.
 
 ## Слой `lib/features/logs/`
 
@@ -305,7 +310,8 @@ test/
 - текущий runtime status
 - copy/clear controls
 
-Важно: это уже продуктовый UI для логов, но источник событий пока application/runtime-controller слой. Production log stream из native backend еще нужно подключить отдельным контрактным изменением.
+Linux дополнительно получает D-Bus `LogEvent` через EventChannel; application
+и native события объединяются в bounded controller ring buffer.
 
 ## Слой `lib/features/settings/`
 
@@ -346,8 +352,10 @@ Android launcher icons, Windows icon и Linux window icon должны гене�
 
 - `android/app/src/main/AndroidManifest.xml`
   Разрешения, activity, VPN service declaration и foreground service metadata. Для Android runtime важны `INTERNET`, `ACCESS_NETWORK_STATE`, `POST_NOTIFICATIONS`, foreground service permissions и `BIND_VPN_SERVICE` на service.
-- `android/app/src/main/assets/qnzapret/`
-  APK-bundled assets для Android runtime: hostlists и binary payloads дефолтной lightweight стратегии.
+- `runtime/assets/qnzapret/`
+  Canonical hostlists, payloads, Lua and pinned Linux binaries. Android Gradle
+  подключает `runtime/assets` как `main` assets source set, поэтому APK wire
+  paths остаются `qnzapret/...` без дублирования файлов.
 - `android/app/src/main/jni/`
   Native-сборка `hev-socks5-tunnel` через Android NDK. Этот MIT-компонент получает TUN fd и перенаправляет TCP/UDP в локальный SOCKS5 proxy.
 - `android/app/src/main/kotlin/dev/qnzapret/MainActivity.kt`
@@ -434,8 +442,27 @@ Channel:
 
 ### `linux/`
 
-Текущий Linux runner.
-Реальный Linux bridge или process adapter еще не реализован.
+Linux production-контур:
+
+- `runner/linux_proxy_runtime_plugin.*` — MethodChannel/EventChannel adapter,
+  system/session D-Bus mapping и объединение snapshot;
+- `runtime/runtime_daemon.cc` — отдельный root-owned system daemon
+  `qnzapret-runtime`;
+- `runtime/telegram_sidecar.cc` — непривилегированный session D-Bus
+  supervisor;
+- `runtime/runtime_contract.*` — deterministic allowlist compiler, nftables
+  rules и redaction;
+- `runtime/runtime_contract_test.cc` — native unit/golden tests.
+- `runtime/telegram_state_directory.*` — systemd/XDG state path resolver and
+  native tests.
+
+Production assets находятся в `runtime/assets/qnzapret/`. Android Gradle
+подключает `runtime/assets` как source set, поэтому APK wire paths
+`qnzapret/lists/...` и `qnzapret/payloads/...` не изменились.
+
+System integration и package metadata находятся в `packaging/linux/`:
+systemd system/user units, D-Bus service/policy, Polkit action, sysusers,
+tmpfiles, desktop/AppStream metadata и `.deb`/`.rpm` builder.
 
 ### `windows/`
 
@@ -448,7 +475,10 @@ Channel:
 
 - `test/core/backend/proxy_runtime_test.dart`
 - `test/core/backend/proxy_runtime_controller_test.dart`
+- `test/core/backend/linux_proxy_runtime_test.dart`
 - `test/widget_test.dart`
+- `test/integration/linux_netns_runtime_test.sh`
+- `linux/runtime/runtime_contract_test.cc`
 - `android/app/src/test/kotlin/dev/qnzapret/TcpRelayStateTest.kt`
 - `android/app/src/test/kotlin/dev/qnzapret/IpPacketCodecTest.kt`
 - `android/app/src/test/kotlin/dev/qnzapret/QuicHostCorrelationTest.kt`
@@ -458,6 +488,8 @@ Channel:
 
 - `flutter analyze`
 - `flutter test`
+- `ctest --test-dir build/linux/x64/release --output-on-failure`
+- `sudo test/integration/linux_netns_runtime_test.sh`
 - `cd android && ./gradlew test` на Linux/macOS
 - `cd android; .\gradlew.bat test` на Windows
 

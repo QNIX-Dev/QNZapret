@@ -1,0 +1,31 @@
+[Unit]
+Description=QNZapret Telegram compatibility sidecar
+Documentation=file:///usr/share/doc/qnzapret/linux_runtime_handoff.md
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=dev.qnzapret.Telegram1
+ExecStart=/usr/libexec/qnzapret-telegram-sidecar
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+StateDirectory=qnzapret
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+TimeoutStopSec=8s
+
+[Install]
+WantedBy=default.target

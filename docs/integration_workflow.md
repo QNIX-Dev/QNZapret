@@ -238,7 +238,73 @@ Composition root создает `ProxyRuntime` и передает его чер
 ## Предлагаемый порядок следующих задач
 
 1. Добить оставшийся local proxy hardening: write backpressure, лимиты сессий, расширенная диагностика и Android device smoke при `establishTunnel=true`.
-2. Добавить production log stream поверх текущего `ProxyRuntimeController`.
+2. Добавить Android production log stream по уже используемой Linux-модели
+   `ProxyRuntimeLogEvent`.
 3. Расширить QUIC correlation для DoH/DoT, DNS cache misses и сложных multi-IP сценариев.
 4. Расширить diagnostics snapshot, если UI понадобится больше runtime health-полей.
-5. После Android описать equivalent bridge strategy для Linux и Windows.
+5. После Android/Linux описать equivalent bridge strategy для Windows.
+
+## Linux integration workflow
+
+Linux GUI нельзя запускать через `sudo`. Проверка production path выполняется
+только после установки `.deb` или `.rpm`:
+
+1. `prepare()` проверяет system daemon, версию, checksums, nft/NFQUEUE,
+   `nfqws2 --version`, compiler dry-run и Telegram sidecar.
+2. Пользовательский `Start` активирует user sidecar и вызывает system D-Bus
+   `Start`; Polkit показывает штатный prompt.
+3. Daemon берёт lock, проверяет conflict, компилирует Linux-specific
+   Fedora-smoke-verified HTTP/TLS/QUIC profile для pinned binary, выполняет
+   `nfqws2 --dry-run`, асинхронно ждёт queue 200 и только затем атомарно
+   применяет `inet qnzapret`.
+4. При смерти `nfqws2` daemon немедленно удаляет только `inet qnzapret`,
+   очищает queue/rules/interception readiness и публикует `failed`.
+5. `Stop` сначала снимает собственную table, затем останавливает `nfqws2` и
+   user sidecar. Повторный `Stop` безопасен.
+
+Проверки:
+
+```bash
+ctest --test-dir build/linux/x64/release --output-on-failure
+sudo test/integration/linux_netns_runtime_test.sh
+flutter build linux --release
+bash packaging/linux/build_packages.sh
+```
+
+Network namespace test не должен выполняться без root: в таком окружении он
+завершается кодом `77` и считается явно пропущенным, а не успешно пройденным.
+С root тест создаёт отдельные client/server netns, проводит реальные HTTP/TLS
+payloads, проверяет counters/L7 diagnostics и автоматический crash cleanup
+daemon, сохраняя foreign nft table.
+
+Если deterministic netns-проверка проходит, но реальный провайдерский DPI всё
+ещё блокирует TLS после ClientHello, фиксированная root-only матрица запускается
+только при остановленном QNZapret:
+
+```bash
+sudo test/integration/linux_real_strategy_matrix.sh
+```
+
+Матрица не принимает пользовательские аргументы стратегии, использует только
+встроенный allowlist кандидатов, меняет исключительно `table inet qnzapret` и
+после каждого кандидата завершает свой worker. Найденный кандидат не считается
+production-стратегией до переноса в compiler, пересборки пакета и повторного
+one-button smoke.
+
+Кандидат `friend-pc` дал HTTP 200 для Google и YouTube, успешный TLS для
+`i.ytimg.com`, загрузил 10 MiB через SNI `test.googlevideo.com`, прошёл YouTube
+HTTP/3 и увеличил nft counters с 0 до 232. После переноса кандидата матрица
+получает аргументы непосредственно из production compiler через
+`--print-profile`, поэтому последующие прогоны проверяют уже поставляемый
+профиль. Это Linux-only результат; Android no-root runtime продолжает
+использовать собственную стратегию.
+
+Установленный Fedora RPM `0.0.4-1.fc44` затем прошёл one-button smoke:
+`nfqws2` работал от `qnzapret-runtime`, YouTube воспроизводился в браузере,
+Telegram Desktop 7.0.1 подключился к `127.0.0.1:1443`, а sidecar подтвердил
+MTProto handshake и живой upstream WS bridge. В ходе smoke выявлено, что
+generic GIO activation запускал Telegram, но не всегда доставлял proxy URI.
+В `0.0.5` доставка была исправлена прямым
+`org.freedesktop.Application.Open`. Начиная с `0.0.6`, обычный Start больше
+не запускает Telegram автоматически: sidecar работает в фоне, а сохранённый
+proxy-профиль подключается при уже запущенном или вручную открытом клиенте.

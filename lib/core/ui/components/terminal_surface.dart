@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../../app/theme/app_theme.dart';
 import '../../motion/app_motion.dart';
+import '../../motion/app_scroll_behavior.dart';
 import '../../state/runtime_view_models.dart';
 import '../design_tokens.dart';
 
@@ -145,18 +146,15 @@ class TerminalSurface extends StatelessWidget {
                     ),
                   )
                 : SelectionArea(
-                    child: Scrollbar(
+                    child: ListView.separated(
                       controller: scrollController,
-                      thumbVisibility: true,
-                      child: ListView.separated(
-                        controller: scrollController,
-                        padding: const EdgeInsets.all(AppSpacing.md),
-                        itemCount: logs.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 8),
-                        itemBuilder: (context, index) {
-                          return _AnimatedLogLine(entry: logs[index]);
-                        },
-                      ),
+                      physics: appVerticalScrollPhysics,
+                      padding: const EdgeInsets.all(AppSpacing.md),
+                      itemCount: logs.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        return _AnimatedLogLine(entry: logs[index]);
+                      },
                     ),
                   ),
           ),

@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+systemctl daemon-reload >/dev/null 2>&1 || true
+if [ "${1:-}" = "purge" ]; then
+  userdel qnzapret-runtime >/dev/null 2>&1 || true
+  rmdir /var/lib/qnzapret >/dev/null 2>&1 || true
+fi

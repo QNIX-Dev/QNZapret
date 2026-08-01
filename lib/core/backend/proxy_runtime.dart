@@ -1,6 +1,23 @@
+import 'dart:async';
+
 enum ProxyPlatform { android, linux, windows }
 
 enum ProxyRuntimeState { idle, starting, running, stopping, failed }
+
+enum TrafficInterceptionMode { none, androidVpnTun, linuxNfqueue }
+
+enum TelegramSidecarState {
+  unavailable,
+  idle,
+  starting,
+  running,
+  stopping,
+  failed,
+}
+
+enum ProxyRuntimeEventKind { snapshot, log }
+
+enum ProxyRuntimeLogLevel { debug, info, warning, error }
 
 enum StrategyProtocol { http, tls, quic }
 
@@ -30,6 +47,63 @@ class ProxyPrepareResult {
   }
 }
 
+class ProxyRuntimeLogEvent {
+  const ProxyRuntimeLogEvent({
+    required this.timestamp,
+    required this.level,
+    required this.source,
+    required this.code,
+    required this.message,
+  });
+
+  final DateTime timestamp;
+  final ProxyRuntimeLogLevel level;
+  final String source;
+  final String code;
+  final String message;
+
+  factory ProxyRuntimeLogEvent.fromMap(Map<Object?, Object?> map) {
+    final timestampMillis = (map['timestampMillis'] as num?)?.toInt();
+    final timestampText = map['timestamp'] as String?;
+    return ProxyRuntimeLogEvent(
+      timestamp: timestampMillis != null
+          ? DateTime.fromMillisecondsSinceEpoch(
+              timestampMillis,
+              isUtc: true,
+            ).toLocal()
+          : DateTime.tryParse(timestampText ?? '')?.toLocal() ?? DateTime.now(),
+      level: _parseRuntimeLogLevel(map['level'] as String?),
+      source: map['source'] as String? ?? 'runtime',
+      code: map['code'] as String? ?? 'runtime_event',
+      message: map['message'] as String? ?? '',
+    );
+  }
+}
+
+class ProxyRuntimeEvent {
+  const ProxyRuntimeEvent.snapshot(this.snapshot) : log = null;
+
+  const ProxyRuntimeEvent.log(this.log) : snapshot = null;
+
+  final ProxyRuntimeSnapshot? snapshot;
+  final ProxyRuntimeLogEvent? log;
+
+  ProxyRuntimeEventKind get kind => snapshot != null
+      ? ProxyRuntimeEventKind.snapshot
+      : ProxyRuntimeEventKind.log;
+
+  factory ProxyRuntimeEvent.fromMap(Map<Object?, Object?> map) {
+    if (map['type'] == 'snapshot') {
+      return ProxyRuntimeEvent.snapshot(
+        ProxyRuntimeSnapshot.fromMap(_parseObjectMap(map['snapshot'])),
+      );
+    }
+    return ProxyRuntimeEvent.log(
+      ProxyRuntimeLogEvent.fromMap(_parseObjectMap(map['log'])),
+    );
+  }
+}
+
 class ProxyLaunchConfig {
   const ProxyLaunchConfig({
     required this.localHost,
@@ -49,6 +123,20 @@ class ProxyLaunchConfig {
     cloudflareEnabled: false,
     secret: '',
   );
+
+  static const defaultLinuxStrategy = ProxyLaunchConfig(
+    localHost: '127.0.0.1',
+    localPort: 1080,
+    poolSize: 0,
+    cloudflareEnabled: true,
+    secret: '',
+  );
+
+  static ProxyLaunchConfig defaultForPlatform(ProxyPlatform platform) {
+    return platform == ProxyPlatform.linux
+        ? defaultLinuxStrategy
+        : defaultAndroidStrategy;
+  }
 
   final String localHost;
   final int localPort;
@@ -435,6 +523,17 @@ class ProxyRuntimeSnapshot {
     required this.ipv6UdpForwarderReady,
     required this.tcpForwarderReady,
     this.activeProfileName,
+    this.trafficInterceptionMode = TrafficInterceptionMode.none,
+    this.trafficInterceptionActive = false,
+    this.queueRegistered = false,
+    this.nftRulesInstalled = false,
+    this.interceptionReady = false,
+    this.backendVersion,
+    this.runtimeOwnerUid,
+    this.telegramSidecarState = TelegramSidecarState.unavailable,
+    this.degraded = false,
+    this.partialFailureCode,
+    this.partialFailureMessage,
     this.telegramCompatibilityProxyReady = false,
     this.telegramCompatibilitySetupRequired = false,
     this.telegramCompatibilityProxyEndpoint,
@@ -450,12 +549,23 @@ class ProxyRuntimeSnapshot {
   final bool strategyEngineReady;
   final bool trafficForwarderReady;
   final bool tunnelActive;
+  final TrafficInterceptionMode trafficInterceptionMode;
+  final bool trafficInterceptionActive;
+  final bool queueRegistered;
+  final bool nftRulesInstalled;
+  final bool interceptionReady;
   final bool packetCodecReady;
   final bool udpForwarderReady;
   final bool ipv6PacketCodecReady;
   final bool ipv6UdpForwarderReady;
   final bool tcpForwarderReady;
   final String? activeProfileName;
+  final String? backendVersion;
+  final int? runtimeOwnerUid;
+  final TelegramSidecarState telegramSidecarState;
+  final bool degraded;
+  final String? partialFailureCode;
+  final String? partialFailureMessage;
   final bool telegramCompatibilityProxyReady;
   final bool telegramCompatibilitySetupRequired;
   final String? telegramCompatibilityProxyEndpoint;
@@ -472,31 +582,81 @@ class ProxyRuntimeSnapshot {
       strategyEngineReady: false,
       trafficForwarderReady: false,
       tunnelActive: false,
+      trafficInterceptionMode: TrafficInterceptionMode.none,
+      trafficInterceptionActive: false,
+      queueRegistered: false,
+      nftRulesInstalled: false,
+      interceptionReady: false,
       packetCodecReady: false,
       udpForwarderReady: false,
       ipv6PacketCodecReady: false,
       ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
+      telegramSidecarState: TelegramSidecarState.unavailable,
+      degraded: false,
       telegramCompatibilityProxyReady: false,
       telegramCompatibilitySetupRequired: false,
     );
   }
 
   factory ProxyRuntimeSnapshot.fromMap(Map<Object?, Object?> map) {
+    final platform = _parsePlatform(map['platform'] as String?);
+    final state = _parseRuntimeState(map['state'] as String?);
     final activeProfileName = map['activeProfileName'] as String?;
     final telegramEndpoint =
         map['telegramCompatibilityProxyEndpoint'] as String?;
     final telegramMessage = map['telegramCompatibilityProxyMessage'] as String?;
+    final legacyTunnelActive = map['tunnelActive'] as bool? ?? false;
+    final strategyEngineReady = map['strategyEngineReady'] as bool? ?? false;
+    final trafficForwarderReady =
+        map['trafficForwarderReady'] as bool? ?? false;
+    final interceptionMode = _parseTrafficInterceptionMode(
+      map['trafficInterceptionMode'] as String?,
+      legacyTunnelActive: legacyTunnelActive,
+    );
+    final interceptionActive =
+        map['trafficInterceptionActive'] as bool? ?? legacyTunnelActive;
+    final queueRegistered =
+        map['queueRegistered'] as bool? ??
+        (platform == ProxyPlatform.linux && strategyEngineReady);
+    final nftRulesInstalled =
+        map['nftRulesInstalled'] as bool? ??
+        (platform == ProxyPlatform.linux && trafficForwarderReady);
+    final interceptionReady =
+        map['interceptionReady'] as bool? ??
+        (interceptionActive &&
+            trafficForwarderReady &&
+            (platform != ProxyPlatform.linux ||
+                (queueRegistered && nftRulesInstalled)));
+    final telegramProxyReady =
+        map['telegramCompatibilityProxyReady'] as bool? ?? false;
+    final telegramSidecarState = _parseTelegramSidecarState(
+      map['telegramSidecarState'] as String?,
+      runtimeState: state,
+      legacyProxyReady: telegramProxyReady,
+    );
+    final partialFailureCode = _nonEmptyString(map['partialFailureCode']);
+    final partialFailureMessage = _nonEmptyString(map['partialFailureMessage']);
+    final degraded =
+        (map['degraded'] as bool? ?? false) ||
+        partialFailureCode != null ||
+        partialFailureMessage != null ||
+        telegramSidecarState == TelegramSidecarState.failed;
     return ProxyRuntimeSnapshot(
-      platform: _parsePlatform(map['platform'] as String?),
-      state: _parseRuntimeState(map['state'] as String?),
+      platform: platform,
+      state: state,
       message: map['message'] as String? ?? '',
       backendConnected: map['backendConnected'] as bool? ?? false,
       vpnPermissionGranted: map['vpnPermissionGranted'] as bool? ?? false,
       serviceActive: map['serviceActive'] as bool? ?? false,
-      strategyEngineReady: map['strategyEngineReady'] as bool? ?? false,
-      trafficForwarderReady: map['trafficForwarderReady'] as bool? ?? false,
-      tunnelActive: map['tunnelActive'] as bool? ?? false,
+      strategyEngineReady: strategyEngineReady,
+      trafficForwarderReady: trafficForwarderReady,
+      tunnelActive: legacyTunnelActive,
+      trafficInterceptionMode: interceptionMode,
+      trafficInterceptionActive: interceptionActive,
+      queueRegistered: queueRegistered,
+      nftRulesInstalled: nftRulesInstalled,
+      interceptionReady: interceptionReady,
       packetCodecReady: map['packetCodecReady'] as bool? ?? false,
       udpForwarderReady: map['udpForwarderReady'] as bool? ?? false,
       ipv6PacketCodecReady: map['ipv6PacketCodecReady'] as bool? ?? false,
@@ -505,8 +665,16 @@ class ProxyRuntimeSnapshot {
       activeProfileName: (activeProfileName?.isEmpty ?? true)
           ? null
           : activeProfileName,
-      telegramCompatibilityProxyReady:
-          map['telegramCompatibilityProxyReady'] as bool? ?? false,
+      backendVersion: switch (map['backendVersion'] as String?) {
+        final value? when value.isNotEmpty => value,
+        _ => null,
+      },
+      runtimeOwnerUid: (map['runtimeOwnerUid'] as num?)?.toInt(),
+      telegramSidecarState: telegramSidecarState,
+      degraded: degraded,
+      partialFailureCode: partialFailureCode,
+      partialFailureMessage: partialFailureMessage,
+      telegramCompatibilityProxyReady: telegramProxyReady,
       telegramCompatibilitySetupRequired:
           map['telegramCompatibilitySetupRequired'] as bool? ?? false,
       telegramCompatibilityProxyEndpoint: (telegramEndpoint?.isEmpty ?? true)
@@ -528,12 +696,24 @@ class ProxyRuntimeSnapshot {
     bool? strategyEngineReady,
     bool? trafficForwarderReady,
     bool? tunnelActive,
+    TrafficInterceptionMode? trafficInterceptionMode,
+    bool? trafficInterceptionActive,
+    bool? queueRegistered,
+    bool? nftRulesInstalled,
+    bool? interceptionReady,
     bool? packetCodecReady,
     bool? udpForwarderReady,
     bool? ipv6PacketCodecReady,
     bool? ipv6UdpForwarderReady,
     bool? tcpForwarderReady,
     String? activeProfileName,
+    String? backendVersion,
+    int? runtimeOwnerUid,
+    TelegramSidecarState? telegramSidecarState,
+    bool? degraded,
+    String? partialFailureCode,
+    String? partialFailureMessage,
+    bool clearPartialFailure = false,
     bool? telegramCompatibilityProxyReady,
     bool? telegramCompatibilitySetupRequired,
     String? telegramCompatibilityProxyEndpoint,
@@ -550,6 +730,13 @@ class ProxyRuntimeSnapshot {
       trafficForwarderReady:
           trafficForwarderReady ?? this.trafficForwarderReady,
       tunnelActive: tunnelActive ?? this.tunnelActive,
+      trafficInterceptionMode:
+          trafficInterceptionMode ?? this.trafficInterceptionMode,
+      trafficInterceptionActive:
+          trafficInterceptionActive ?? this.trafficInterceptionActive,
+      queueRegistered: queueRegistered ?? this.queueRegistered,
+      nftRulesInstalled: nftRulesInstalled ?? this.nftRulesInstalled,
+      interceptionReady: interceptionReady ?? this.interceptionReady,
       packetCodecReady: packetCodecReady ?? this.packetCodecReady,
       udpForwarderReady: udpForwarderReady ?? this.udpForwarderReady,
       ipv6PacketCodecReady: ipv6PacketCodecReady ?? this.ipv6PacketCodecReady,
@@ -557,6 +744,16 @@ class ProxyRuntimeSnapshot {
           ipv6UdpForwarderReady ?? this.ipv6UdpForwarderReady,
       tcpForwarderReady: tcpForwarderReady ?? this.tcpForwarderReady,
       activeProfileName: activeProfileName ?? this.activeProfileName,
+      backendVersion: backendVersion ?? this.backendVersion,
+      runtimeOwnerUid: runtimeOwnerUid ?? this.runtimeOwnerUid,
+      telegramSidecarState: telegramSidecarState ?? this.telegramSidecarState,
+      degraded: degraded ?? this.degraded,
+      partialFailureCode: clearPartialFailure
+          ? null
+          : partialFailureCode ?? this.partialFailureCode,
+      partialFailureMessage: clearPartialFailure
+          ? null
+          : partialFailureMessage ?? this.partialFailureMessage,
       telegramCompatibilityProxyReady:
           telegramCompatibilityProxyReady ??
           this.telegramCompatibilityProxyReady,
@@ -576,6 +773,8 @@ class ProxyRuntimeSnapshot {
 abstract interface class ProxyRuntime {
   ProxyPlatform get platform;
 
+  Stream<ProxyRuntimeEvent> get events;
+
   Future<ProxyPrepareResult> prepare();
 
   Future<ProxyRuntimeSnapshot> getSnapshot();
@@ -590,6 +789,9 @@ final class StubProxyRuntime implements ProxyRuntime {
 
   @override
   final ProxyPlatform platform;
+
+  @override
+  Stream<ProxyRuntimeEvent> get events => const Stream.empty();
 
   @override
   Future<ProxyPrepareResult> prepare() async {
@@ -611,11 +813,18 @@ final class StubProxyRuntime implements ProxyRuntime {
       strategyEngineReady: false,
       trafficForwarderReady: false,
       tunnelActive: false,
+      trafficInterceptionMode: TrafficInterceptionMode.none,
+      trafficInterceptionActive: false,
+      queueRegistered: false,
+      nftRulesInstalled: false,
+      interceptionReady: false,
       packetCodecReady: false,
       udpForwarderReady: false,
       ipv6PacketCodecReady: false,
       ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
+      telegramSidecarState: TelegramSidecarState.unavailable,
+      degraded: false,
       telegramCompatibilityProxyReady: false,
       telegramCompatibilitySetupRequired: false,
     );
@@ -626,6 +835,58 @@ final class StubProxyRuntime implements ProxyRuntime {
 
   @override
   Future<void> stop() async {}
+}
+
+TrafficInterceptionMode _parseTrafficInterceptionMode(
+  String? rawValue, {
+  required bool legacyTunnelActive,
+}) {
+  if (rawValue == null || rawValue.isEmpty) {
+    return legacyTunnelActive
+        ? TrafficInterceptionMode.androidVpnTun
+        : TrafficInterceptionMode.none;
+  }
+  return TrafficInterceptionMode.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => TrafficInterceptionMode.none,
+  );
+}
+
+TelegramSidecarState _parseTelegramSidecarState(
+  String? rawValue, {
+  required ProxyRuntimeState runtimeState,
+  required bool legacyProxyReady,
+}) {
+  if (rawValue != null && rawValue.isNotEmpty) {
+    return TelegramSidecarState.values.firstWhere(
+      (value) => value.name == rawValue,
+      orElse: () => TelegramSidecarState.unavailable,
+    );
+  }
+  if (legacyProxyReady) {
+    return TelegramSidecarState.running;
+  }
+  return switch (runtimeState) {
+    ProxyRuntimeState.starting => TelegramSidecarState.starting,
+    ProxyRuntimeState.stopping => TelegramSidecarState.stopping,
+    ProxyRuntimeState.idle => TelegramSidecarState.idle,
+    ProxyRuntimeState.running ||
+    ProxyRuntimeState.failed => TelegramSidecarState.unavailable,
+  };
+}
+
+String? _nonEmptyString(Object? value) {
+  return switch (value) {
+    final String text when text.isNotEmpty => text,
+    _ => null,
+  };
+}
+
+ProxyRuntimeLogLevel _parseRuntimeLogLevel(String? rawValue) {
+  return ProxyRuntimeLogLevel.values.firstWhere(
+    (value) => value.name == rawValue,
+    orElse: () => ProxyRuntimeLogLevel.info,
+  );
 }
 
 ProxyPlatform _parsePlatform(String? rawValue) {

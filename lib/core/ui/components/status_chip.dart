@@ -25,7 +25,8 @@ class RuntimeStatusChip extends StatelessWidget {
       RuntimeStatusKind.service => Icons.power_settings_new_rounded,
       RuntimeStatusKind.engine => Icons.memory_rounded,
       RuntimeStatusKind.forwarder => Icons.route_rounded,
-      RuntimeStatusKind.tunnel => Icons.vpn_lock_rounded,
+      RuntimeStatusKind.interception => Icons.security_rounded,
+      RuntimeStatusKind.telegram => Icons.send_rounded,
     };
 
     final chip = AnimatedContainer(

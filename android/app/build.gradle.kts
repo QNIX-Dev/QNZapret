@@ -47,6 +47,7 @@ android {
     sourceSets {
         getByName("main") {
             jniLibs.srcDir(layout.buildDirectory.dir("generated/ndkLibs"))
+            assets.srcDir(file("../../runtime/assets"))
         }
     }
 }

@@ -11,6 +11,9 @@ final class AndroidProxyRuntime implements ProxyRuntime {
   final MethodChannel _channel;
 
   @override
+  Stream<ProxyRuntimeEvent> get events => const Stream.empty();
+
+  @override
   ProxyPlatform get platform => ProxyPlatform.android;
 
   @override

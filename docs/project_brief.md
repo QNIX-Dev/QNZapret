@@ -8,8 +8,10 @@
 
 ## Что такое QNZapret
 
-`QNZapret` - кроссплатформенный Flutter shell для клиента с нативным runtime/backend-контуром.
-Android-направление строится как no-root VPN/proxy runtime: приложение получает трафик через `VpnService`, направляет его в локальный strategy proxy и применяет собственные DPI-bypass стратегии без встраивания чужого кода.
+`QNZapret` - кроссплатформенный Flutter-клиент с нативными runtime/backend-контурами.
+Android использует no-root VPN/proxy runtime. Linux использует отдельный
+привилегированный system D-Bus daemon для nftables/NFQUEUE и отдельный
+непривилегированный Telegram sidecar пользовательской сессии.
 
 Поддерживаемые цели в репозитории сейчас:
 
@@ -41,13 +43,16 @@ Android-направление строится как no-root VPN/proxy runtime
 - адаптивное открытие настроек: полноценная page route на телефонах и dialog/panel на больших экранах
 - общий Dart-контракт runtime в `lib/core/backend/proxy_runtime.dart`
 - frontend-friendly `ProxyRuntimeController` и barrel export `lib/core/backend/backend.dart`
-- composition helper `createDefaultProxyRuntime()`, который подключает Android adapter на Android и stub-адаптеры на desktop
+- composition helper `createDefaultProxyRuntime()`, который подключает Android adapter
+  на Android, Linux adapter на Linux и stub-адаптер на Windows
 - Riverpod application layer в `lib/core/state/runtime_controller.dart`, который адаптирует `ProxyRuntimeSnapshot` в UI-состояния, CTA, status chips и локальные diagnostic logs
 - русские пользовательские подписи runtime-состояний, CTA, логов, Android foreground notification со state text/actions остановки/перезапуска и native Quick Settings Tile для запуска/остановки
 - serializable strategy profile model для HTTP/TLS/QUIC правил
 - `UnmatchedTrafficPolicy.direct` для трафика вне hostlists: списки включают desync-обработку, а не ограничивают общий доступ
-- `StubProxyRuntime` для состояния, где нативный runtime еще не подключен
+- `StubProxyRuntime` для платформ, где нативный runtime еще не подключен
 - `AndroidProxyRuntime` как Dart-адаптер поверх `MethodChannel`
+- `LinuxProxyRuntime` как Dart-адаптер поверх Linux `MethodChannel` и
+  `EventChannel`
 - Android bridge в `ProxyRuntimeBridge.kt`
 - Android VPN foreground service в `QnzapretVpnService.kt`
 - Android strategy runtime coordinator в `QnzapretAndroidRuntime.kt`
@@ -60,7 +65,14 @@ Android-направление строится как no-root VPN/proxy runtime
 - Telegram compatibility mode без Go-core/JNA: локальный Kotlin MTProxy endpoint `127.0.0.1:1443`, открытие Telegram proxy confirmation screen, clean-room WSS `/apiws` transport, Cloudflare route candidates из локального `telegram_compat.json` и public MIT Flowseal upstream defaults, DNS fallback, fetch/decode/cache route-provider, active-domain/cooldown, EWMA route scoring и one-shot WSS pool для ускорения повторных text/media sessions
 - TUN lifecycle в `TunTransport.kt`: default-route поднимается дефолтным Android launch config при `establishTunnel=true`, собственный пакет приложения исключается из VPN, TUN получает DNS из выбранной underlying-сети и сообщает ее через `setUnderlyingNetworks`; TUN fd передается в MIT `hev-socks5-tunnel`, который маршрутизирует TCP/UDP в локальный strategy SOCKS5 proxy. IPv6 route добавляется только если selected underlying network реально имеет usable IPv6 address и default IPv6 route.
 - controlled Android network self-test в `AndroidNetworkSelfTest.kt`: из процесса приложения логирует `QNZapretNetTest` до старта runtime/TUN и после старта TUN, проверяя plain/protected/bound TCP и protected/bound UDP DNS probe для диагностики UID/app-network blocker
-- Android assets дефолтной lightweight стратегии в `android/app/src/main/assets/qnzapret/`
+- canonical assets дефолтной lightweight стратегии в `runtime/assets/qnzapret/`;
+  Android Gradle подключает `runtime/assets` как `main` assets source set
+- Linux NFQUEUE production candidate: pinned zapret2 `v0.9.5.2` binary and
+  topology with a Fedora-smoke-verified Linux-only HTTP/TLS/QUIC strategy,
+  atomic post-NAT `inet qnzapret` rules with mark/notrack protection,
+  queue/rules/interception readiness, async worker crash cleanup and
+  transactional Telegram sidecar start; установленный RPM прошёл реальный
+  YouTube и Telegram MTProto/upstream-bridge smoke на Fedora 44
 - проверка наличия strategy assets на старте runtime через `StrategyAssetVerifier.kt`
 - Android runtime store для snapshot-состояния в `QnzapretVpnRuntimeStore.kt`
 - Android launcher icons через adaptive icon resources и desktop/window icons для Linux/Windows
@@ -73,8 +85,9 @@ Android-направление строится как no-root VPN/proxy runtime
 - оставшийся hardening local SOCKS5 proxy: write backpressure, лимиты сессий, counters contract для честной скорости в notification и Android device smoke при `establishTunnel=true`
 - raw TCP sequence/timestamp tricks в no-root socket mode; текущий TCP path безопасно применяет TLS record split для TLS, best-effort stream split для остальных TCP payload и пробует TCP fake только как low-hop-limit socket write с безопасным пропуском при недоступной TTL/hop-limit опции
 - расширенная QUIC correlation для DoH/DoT, DNS cache misses и более сложных multi-IP сценариев; базовый UDP/53 + TCP HTTP/TLS correlation уже подключен
-- production поток логов из backend; текущий экран логов уже показывает application/runtime-controller events, но еще не читает native log stream
-- desktop bridge implementations для Linux и Windows
+- Android production поток логов; Linux уже объединяет D-Bus log signals с
+  application/runtime-controller events
+- desktop bridge implementation для Windows
 - полноценные runtime-контролы, пресеты и профили стратегий
 
 ## Главная архитектурная идея
@@ -162,13 +175,18 @@ UI и продуктовые экраны могут развиваться от
 - выбор цветовой палитры
 - блок "О приложении" и внешние CTA
 
-Composition root создает `createDefaultProxyRuntime()` и передает его через `proxyRuntimeProvider`: на Android это реальный `AndroidProxyRuntime`, на desktop пока stub-адаптеры. UI работает через `RuntimeController` / `ProxyRuntimeController` и не вызывает Kotlin/Android детали напрямую.
+Composition root создает `createDefaultProxyRuntime()` и передает его через
+`proxyRuntimeProvider`: на Android это `AndroidProxyRuntime`, на Linux —
+`LinuxProxyRuntime`, на Windows остается stub-адаптер. UI работает через
+`RuntimeController` / `ProxyRuntimeController` и не вызывает Kotlin/Android или
+Linux-детали напрямую.
 
 ## Ближайшая цель следующей стадии
 
 Главная ближайшая цель - довести Android runtime path до реального native runtime/backend-контура:
 
 1. добить оставшийся local proxy hardening: write backpressure, лимиты сессий, диагностика и Android device smoke при `establishTunnel=true`;
-2. добавить production log stream поверх текущего controller/snapshot слоя;
+2. расширить Android production log stream поверх текущего
+   controller/snapshot слоя;
 3. расширить QUIC correlation за пределы UDP/53 и prior TCP HTTP/TLS hints;
-4. после Android закрепить equivalent contract для Linux и Windows.
+4. после Android закрепить equivalent contract для Windows.

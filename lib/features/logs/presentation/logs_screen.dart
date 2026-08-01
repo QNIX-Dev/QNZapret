@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_theme.dart';
 import '../../../core/motion/app_motion.dart';
+import '../../../core/motion/app_scroll_behavior.dart';
 import '../../../core/state/runtime_controller.dart';
 import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/staggered_reveal.dart';
@@ -53,9 +54,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
             : 540.0;
 
         return SingleChildScrollView(
-          physics: const BouncingScrollPhysics(
-            parent: AlwaysScrollableScrollPhysics(),
-          ),
+          physics: appVerticalScrollPhysics,
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: constraints.maxHeight),
             child: Column(

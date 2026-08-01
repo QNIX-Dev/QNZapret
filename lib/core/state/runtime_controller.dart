@@ -30,7 +30,7 @@ class RuntimeViewState {
   factory RuntimeViewState.initial(ProxyRuntime runtime) {
     return RuntimeViewState(
       snapshot: ProxyRuntimeSnapshot.initial(runtime.platform),
-      launchConfig: ProxyLaunchConfig.defaultAndroidStrategy,
+      launchConfig: ProxyLaunchConfig.defaultForPlatform(runtime.platform),
       logs: const [],
       autoScrollEnabled: true,
       isBusy: false,
@@ -83,6 +83,35 @@ class RuntimeViewState {
   List<RuntimeStatusItem> get statusItems {
     return [
       RuntimeStatusItem(
+        kind: RuntimeStatusKind.service,
+        title: 'Сервис',
+        statusLabel: snapshot.honestStatusLabel,
+        tone: snapshot.statusTone,
+        animated: snapshot.isTransitioning || snapshot.serviceActive,
+      ),
+      RuntimeStatusItem(
+        kind: RuntimeStatusKind.interception,
+        title: 'Перехват',
+        statusLabel: snapshot.hasVerifiedInterception
+            ? 'Готов'
+            : snapshot.trafficInterceptionActive
+            ? 'Не готов'
+            : 'Ожидает',
+        tone: snapshot.hasVerifiedInterception
+            ? RuntimeStatusTone.success
+            : snapshot.trafficInterceptionActive
+            ? RuntimeStatusTone.warning
+            : RuntimeStatusTone.neutral,
+        animated: snapshot.isTransitioning,
+      ),
+      RuntimeStatusItem(
+        kind: RuntimeStatusKind.telegram,
+        title: 'Telegram',
+        statusLabel: snapshot.telegramSidecarState.label,
+        tone: snapshot.telegramSidecarState.tone,
+        animated: snapshot.telegramSidecarState.isTransitioning,
+      ),
+      RuntimeStatusItem(
         kind: RuntimeStatusKind.bridge,
         title: 'Связь с системой',
         statusLabel: snapshot.backendConnected ? 'Готова' : 'Ожидает',
@@ -91,42 +120,43 @@ class RuntimeViewState {
             : RuntimeStatusTone.neutral,
       ),
       RuntimeStatusItem(
-        kind: RuntimeStatusKind.service,
-        title: 'Сервис',
-        statusLabel: snapshot.state == ProxyRuntimeState.running
-            ? 'Активен'
-            : snapshot.state.label,
-        tone: snapshot.statusTone,
-        animated: snapshot.isTransitioning || snapshot.serviceActive,
-      ),
-      RuntimeStatusItem(
         kind: RuntimeStatusKind.engine,
-        title: 'Ядро обхода',
-        statusLabel: snapshot.strategyEngineReady ? 'Готово' : 'Ожидает',
-        tone: snapshot.strategyEngineReady
+        title: snapshot.platform == ProxyPlatform.linux
+            ? 'NFQUEUE'
+            : 'Ядро обхода',
+        statusLabel: snapshot.platform == ProxyPlatform.linux
+            ? snapshot.queueRegistered
+                  ? 'Очередь готова'
+                  : 'Ожидает'
+            : snapshot.strategyEngineReady
+            ? 'Готово'
+            : 'Ожидает',
+        tone:
+            (snapshot.platform == ProxyPlatform.linux
+                ? snapshot.queueRegistered
+                : snapshot.strategyEngineReady)
             ? RuntimeStatusTone.success
             : RuntimeStatusTone.neutral,
       ),
       RuntimeStatusItem(
         kind: RuntimeStatusKind.forwarder,
         title: 'Передача',
-        statusLabel: snapshot.trafficForwarderReady
-            ? 'Связана с TUN'
+        statusLabel: snapshot.platform == ProxyPlatform.linux
+            ? snapshot.nftRulesInstalled
+                  ? 'Правила готовы'
+                  : 'Ожидает'
+            : snapshot.trafficForwarderReady
+            ? 'Активна'
             : _capabilityLabel,
-        tone: snapshot.trafficForwarderReady
+        tone:
+            (snapshot.platform == ProxyPlatform.linux
+                ? snapshot.nftRulesInstalled
+                : snapshot.trafficForwarderReady)
             ? RuntimeStatusTone.success
             : snapshot.packetCodecReady ||
                   snapshot.udpForwarderReady ||
                   snapshot.tcpForwarderReady
             ? RuntimeStatusTone.warning
-            : RuntimeStatusTone.neutral,
-      ),
-      RuntimeStatusItem(
-        kind: RuntimeStatusKind.tunnel,
-        title: 'Туннель',
-        statusLabel: snapshot.tunnelActive ? 'Активен' : 'Выключен',
-        tone: snapshot.tunnelActive
-            ? RuntimeStatusTone.success
             : RuntimeStatusTone.neutral,
       ),
     ];
@@ -174,6 +204,7 @@ class RuntimeViewState {
 
 class RuntimeController extends Notifier<RuntimeViewState> {
   ProxyRuntimeController? _runtimeController;
+  StreamSubscription<ProxyRuntimeLogEvent>? _runtimeLogSubscription;
   int _logCounter = 0;
   bool _disposed = false;
 
@@ -183,9 +214,11 @@ class RuntimeController extends Notifier<RuntimeViewState> {
     final controller = ProxyRuntimeController(runtime: runtime);
     _runtimeController = controller;
     controller.addListener(_syncFromRuntimeController);
+    _runtimeLogSubscription = controller.logEvents.listen(_emitRuntimeLog);
 
     ref.onDispose(() {
       _disposed = true;
+      unawaited(_runtimeLogSubscription?.cancel());
       controller.removeListener(_syncFromRuntimeController);
       controller.dispose();
     });
@@ -373,41 +406,100 @@ class RuntimeController extends Notifier<RuntimeViewState> {
       _emitLog(
         level: RuntimeLogLevel.success,
         source: RuntimeLogSource.runtime,
-        message: 'Передача трафика связана с TUN.',
+        message: 'Передача трафика активна.',
       );
     }
 
-    if (!previous.tunnelActive && next.tunnelActive) {
+    if (!previous.trafficInterceptionActive && next.trafficInterceptionActive) {
       _emitLog(
         level: RuntimeLogLevel.success,
         source: RuntimeLogSource.runtime,
-        message: 'TUN-туннель активен.',
+        message: 'Перехват трафика активен.',
+      );
+    }
+
+    if (!previous.queueRegistered && next.queueRegistered) {
+      _emitLog(
+        level: RuntimeLogLevel.success,
+        source: RuntimeLogSource.runtime,
+        message: 'Очередь NFQUEUE зарегистрирована.',
+      );
+    }
+
+    if (!previous.nftRulesInstalled && next.nftRulesInstalled) {
+      _emitLog(
+        level: RuntimeLogLevel.success,
+        source: RuntimeLogSource.runtime,
+        message: 'Правила перехвата установлены.',
+      );
+    }
+
+    if (!previous.hasVerifiedInterception && next.hasVerifiedInterception) {
+      _emitLog(
+        level: RuntimeLogLevel.success,
+        source: RuntimeLogSource.runtime,
+        message: 'Перехват трафика готов.',
+      );
+    }
+
+    if (previous.telegramSidecarState != TelegramSidecarState.failed &&
+        next.telegramSidecarState == TelegramSidecarState.failed) {
+      _emitLog(
+        level: RuntimeLogLevel.error,
+        source: RuntimeLogSource.runtime,
+        message: next.partialFailureMessage ?? 'Сервис Telegram сообщил сбой.',
+      );
+    }
+
+    if (!previous.hasPartialFailure && next.hasPartialFailure) {
+      _emitLog(
+        level: RuntimeLogLevel.warning,
+        source: RuntimeLogSource.runtime,
+        message: next.partialFailureMessage ?? 'Сервисы запущены не полностью.',
       );
     }
 
     if (next.state == ProxyRuntimeState.running &&
         next.serviceActive &&
-        !next.tunnelActive &&
+        !next.hasVerifiedInterception &&
         !previous.serviceActive) {
       _emitLog(
         level: RuntimeLogLevel.info,
         source: RuntimeLogSource.runtime,
-        message: 'Системный сервис активен; туннель не поднят.',
+        message: 'Системный сервис активен; перехват еще не готов.',
       );
     }
+  }
+
+  void _emitRuntimeLog(ProxyRuntimeLogEvent event) {
+    final level = switch (event.level) {
+      ProxyRuntimeLogLevel.debug => RuntimeLogLevel.system,
+      ProxyRuntimeLogLevel.info => RuntimeLogLevel.info,
+      ProxyRuntimeLogLevel.warning => RuntimeLogLevel.warning,
+      ProxyRuntimeLogLevel.error => RuntimeLogLevel.error,
+    };
+    _emitLog(
+      level: level,
+      source: RuntimeLogSource.runtime,
+      message: event.message,
+      id: '${event.source}:${event.code}:${event.timestamp.microsecondsSinceEpoch}',
+      timestamp: event.timestamp,
+    );
   }
 
   void _emitLog({
     required RuntimeLogLevel level,
     required String message,
     RuntimeLogSource? source,
+    String? id,
+    DateTime? timestamp,
   }) {
     _logCounter += 1;
     final nextLogs = [
       ...state.logs,
       RuntimeLogEntry(
-        id: 'log_${_logCounter.toString().padLeft(4, '0')}',
-        timestamp: DateTime.now(),
+        id: id ?? 'log_${_logCounter.toString().padLeft(4, '0')}',
+        timestamp: timestamp ?? DateTime.now(),
         level: level,
         message: message,
         source: source,

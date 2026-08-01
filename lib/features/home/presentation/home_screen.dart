@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/app_metadata.dart';
 import '../../../core/backend/backend.dart';
+import '../../../core/motion/app_scroll_behavior.dart';
 import '../../../core/state/runtime_controller.dart';
 import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/connected_flow_illustration.dart';
@@ -43,9 +44,7 @@ class HomeScreen extends ConsumerWidget {
             : 0.0;
 
         return SingleChildScrollView(
-          physics: const BouncingScrollPhysics(
-            parent: AlwaysScrollableScrollPhysics(),
-          ),
+          physics: appVerticalScrollPhysics,
           child: Column(
             children: [
               ConstrainedBox(
@@ -265,24 +264,29 @@ class _HeroDetails extends StatelessWidget {
       return failure.message;
     }
 
-    if (snapshot.tunnelActive && snapshot.trafficForwarderReady) {
-      return 'Туннель и передача трафика активны.';
+    if (snapshot.hasPartialFailure) {
+      return snapshot.partialFailureMessage ??
+          'Основной сервис активен, но часть компонентов недоступна.';
+    }
+
+    if (snapshot.isOperational) {
+      return 'Перехват трафика готов.';
     }
 
     if (snapshot.state == ProxyRuntimeState.running &&
         snapshot.serviceActive &&
-        !snapshot.tunnelActive) {
-      return 'Системный сервис активен; туннель выключен текущей конфигурацией.';
+        !snapshot.hasVerifiedInterception) {
+      return 'Системный сервис активен, но перехват еще не готов.';
     }
 
     if (snapshot.strategyEngineReady) {
-      return 'Ядро обхода готово; готовность передачи и туннеля показана отдельно.';
+      return 'Ядро обхода готово; готовность передачи и перехвата показана отдельно.';
     }
 
     return switch (snapshot.state) {
       ProxyRuntimeState.idle => null,
       ProxyRuntimeState.starting => 'Запускаем сервисы.',
-      ProxyRuntimeState.running => 'Сервис активен.',
+      ProxyRuntimeState.running => 'Запуск сервиса не завершен.',
       ProxyRuntimeState.stopping => 'Останавливаем сервисы.',
       ProxyRuntimeState.failed => 'Сервис сообщил сбой.',
     };

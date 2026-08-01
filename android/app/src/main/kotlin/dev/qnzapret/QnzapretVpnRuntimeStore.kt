@@ -46,6 +46,13 @@ internal object QnzapretVpnRuntimeStore {
             "strategyEngineReady" to strategyEngineReady,
             "trafficForwarderReady" to trafficForwarderReady,
             "tunnelActive" to tunnelActive,
+            "trafficInterceptionMode" to if (tunnelActive) {
+                "androidVpnTun"
+            } else {
+                "none"
+            },
+            "trafficInterceptionActive" to tunnelActive,
+            "backendVersion" to "android-1",
             "packetCodecReady" to packetCodecReady,
             "udpForwarderReady" to udpForwarderReady,
             "ipv6PacketCodecReady" to ipv6PacketCodecReady,

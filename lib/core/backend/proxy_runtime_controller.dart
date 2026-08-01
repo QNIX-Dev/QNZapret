@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -41,9 +43,16 @@ final class ProxyRuntimeFailure {
 final class ProxyRuntimeController extends ChangeNotifier {
   ProxyRuntimeController({
     required this.runtime,
-    ProxyLaunchConfig initialConfig = ProxyLaunchConfig.defaultAndroidStrategy,
-  }) : _launchConfig = initialConfig,
-       _snapshot = ProxyRuntimeSnapshot.initial(runtime.platform);
+    ProxyLaunchConfig? initialConfig,
+  }) : _launchConfig =
+           initialConfig ??
+           ProxyLaunchConfig.defaultForPlatform(runtime.platform),
+       _snapshot = ProxyRuntimeSnapshot.initial(runtime.platform) {
+    _eventSubscription = runtime.events.listen(
+      _onRuntimeEvent,
+      onError: _onRuntimeEventError,
+    );
+  }
 
   final ProxyRuntime runtime;
 
@@ -53,6 +62,9 @@ final class ProxyRuntimeController extends ChangeNotifier {
   ProxyRuntimeFailure? _lastFailure;
   bool _busy = false;
   bool _disposed = false;
+  late final StreamSubscription<ProxyRuntimeEvent> _eventSubscription;
+  final StreamController<ProxyRuntimeLogEvent> _logEvents =
+      StreamController<ProxyRuntimeLogEvent>.broadcast();
 
   ProxyRuntimeSnapshot get snapshot => _snapshot;
 
@@ -63,6 +75,8 @@ final class ProxyRuntimeController extends ChangeNotifier {
   ProxyRuntimeFailure? get lastFailure => _lastFailure;
 
   bool get isBusy => _busy;
+
+  Stream<ProxyRuntimeLogEvent> get logEvents => _logEvents.stream;
 
   bool get needsPrepare {
     return _snapshot.platform == ProxyPlatform.android &&
@@ -174,6 +188,27 @@ final class ProxyRuntimeController extends ChangeNotifier {
     }
   }
 
+  void _onRuntimeEvent(ProxyRuntimeEvent event) {
+    if (_disposed) {
+      return;
+    }
+    if (event.snapshot case final snapshot?) {
+      _snapshot = snapshot;
+      _emit();
+    }
+    if (event.log case final log?) {
+      _logEvents.add(log);
+    }
+  }
+
+  void _onRuntimeEventError(Object error, StackTrace stackTrace) {
+    if (_disposed) {
+      return;
+    }
+    _lastFailure = ProxyRuntimeFailure.fromError(error);
+    _emit();
+  }
+
   void _emit() {
     if (!_disposed) {
       notifyListeners();
@@ -183,6 +218,8 @@ final class ProxyRuntimeController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    unawaited(_eventSubscription.cancel());
+    unawaited(_logEvents.close());
     super.dispose();
   }
 

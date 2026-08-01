@@ -1,0 +1,46 @@
+[Unit]
+Description=QNZapret privileged NFQUEUE runtime
+Documentation=file:///usr/share/doc/qnzapret/linux_runtime_handoff.md
+After=dbus.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=dbus
+BusName=dev.qnzapret.Runtime1
+ExecStartPre=/usr/libexec/qnzapret-runtime --cleanup
+ExecStart=/usr/libexec/qnzapret-runtime
+ExecStopPost=/usr/libexec/qnzapret-runtime --cleanup
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=qnzapret
+RuntimeDirectoryMode=0750
+StateDirectory=qnzapret
+StateDirectoryMode=0750
+UMask=0027
+User=root
+Group=root
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_KILL
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_KILL
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+# nfqws2 embeds LuaJIT and requires executable mappings for its JIT runtime.
+MemoryDenyWriteExecute=no
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6 AF_PACKET
+ReadWritePaths=/run/qnzapret /var/lib/qnzapret
+KillMode=control-group
+TimeoutStopSec=8s
+
+[Install]
+WantedBy=multi-user.target

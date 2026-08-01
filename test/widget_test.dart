@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qnzapret/app/app.dart';
+import 'package:qnzapret/core/motion/app_scroll_behavior.dart';
 import 'package:qnzapret/core/persistence/shared_preferences_provider.dart';
 import 'package:qnzapret/core/ui/components/terminal_illustration.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,11 +22,19 @@ void main() {
 
     expect(find.text('QNZapret'), findsOneWidget);
     expect(find.text('Разрешить запуск'), findsOneWidget);
-    expect(find.text('Связь с системой'), findsOneWidget);
     expect(find.text('Сервис'), findsOneWidget);
-    expect(find.text('Ядро обхода'), findsOneWidget);
+    expect(find.text('Перехват'), findsOneWidget);
+    expect(find.text('Telegram'), findsOneWidget);
     expect(find.text('Runtime bridge'), findsNothing);
     expect(find.text('Запустить runtime'), findsNothing);
+    expect(find.byType(Scrollbar), findsNothing);
+
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.scrollBehavior, isA<AppScrollBehavior>());
+    final homeScroll = tester.widget<SingleChildScrollView>(
+      find.byType(SingleChildScrollView),
+    );
+    expect(homeScroll.physics, isA<AppBouncingScrollPhysics>());
   });
 
   testWidgets('mobile settings opens as a page with top blocks visible', (

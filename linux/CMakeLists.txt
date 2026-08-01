@@ -4,7 +4,7 @@ project(runner LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "QNZapret")
+set(BINARY_NAME "qnzapret")
 # The unique GTK application identifier for this application. See:
 # https://wiki.gnome.org/HowDoI/ChooseApplicationID
 set(APPLICATION_ID "dev.qnzapret")
@@ -53,9 +53,52 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # System-level dependencies.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
+pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
 
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
+
+add_executable(qnzapret-runtime
+  "runtime/runtime_daemon.cc"
+  "runtime/runtime_contract.cc"
+)
+target_compile_features(qnzapret-runtime PRIVATE cxx_std_17)
+target_compile_options(qnzapret-runtime PRIVATE
+  -Wall -Wextra -Wpedantic -Werror
+)
+target_link_libraries(qnzapret-runtime PRIVATE PkgConfig::GIO)
+
+add_executable(qnzapret-telegram-sidecar
+  "runtime/telegram_sidecar.cc"
+  "runtime/runtime_contract.cc"
+)
+target_compile_features(qnzapret-telegram-sidecar PRIVATE cxx_std_17)
+target_compile_options(qnzapret-telegram-sidecar PRIVATE
+  -Wall -Wextra -Wpedantic -Werror
+)
+target_link_libraries(qnzapret-telegram-sidecar PRIVATE PkgConfig::GIO)
+
+enable_testing()
+add_executable(qnzapret-runtime-tests
+  "runtime/runtime_contract_test.cc"
+  "runtime/runtime_contract.cc"
+)
+target_compile_features(qnzapret-runtime-tests PRIVATE cxx_std_17)
+target_compile_options(qnzapret-runtime-tests PRIVATE
+  -Wall -Wextra -Wpedantic -Werror
+)
+add_test(NAME qnzapret-runtime-contract COMMAND qnzapret-runtime-tests)
+
+add_executable(qnzapret-telegram-state-tests
+  "runtime/telegram_state_directory_test.cc"
+)
+target_compile_features(qnzapret-telegram-state-tests PRIVATE cxx_std_17)
+target_compile_options(qnzapret-telegram-state-tests PRIVATE
+  -Wall -Wextra -Wpedantic -Werror
+)
+target_link_libraries(qnzapret-telegram-state-tests PRIVATE PkgConfig::GIO)
+add_test(NAME qnzapret-telegram-state-directory
+  COMMAND qnzapret-telegram-state-tests)
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
@@ -73,6 +116,16 @@ set_target_properties(${BINARY_NAME}
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
+
+# Flutter's url_launcher Linux target otherwise keeps an absolute build-tree
+# RUNPATH. Production bundles and RPM packages must resolve next to the
+# installed shared object.
+if(TARGET url_launcher_linux_plugin)
+  set_target_properties(url_launcher_linux_plugin PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$ORIGIN"
+  )
+endif()
 
 
 # === Installation ===
@@ -92,6 +145,17 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(TARGETS qnzapret-runtime qnzapret-telegram-sidecar
+  RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}/libexec"
+  COMPONENT Runtime)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/../runtime/assets/qnzapret/"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/runtime"
+  COMPONENT Runtime
+  USE_SOURCE_PERMISSIONS)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/../runtime/telegram/flowseal/"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/telegram"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

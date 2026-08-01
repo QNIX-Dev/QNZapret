@@ -1,7 +1,7 @@
 name: qnzapret
 description: "Cross-platform frontend shell for the QNZapret client."
 publish_to: 'none'
-version: 0.0.1+1
+version: 0.0.6+6
 
 environment:
   sdk: ^3.11.4

@@ -1,0 +1,25 @@
+name: Windows release contract check
+
+on:
+  pull_request:
+    paths:
+      - "lib/core/backend/**"
+      - "lib/core/state/**"
+      - "windows/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+  workflow_dispatch:
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build windows --release

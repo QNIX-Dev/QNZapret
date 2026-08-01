@@ -22,7 +22,14 @@ extension RuntimeLogSourceX on RuntimeLogSource {
 
 enum RuntimeStatusTone { neutral, info, success, warning, danger }
 
-enum RuntimeStatusKind { bridge, service, engine, forwarder, tunnel }
+enum RuntimeStatusKind {
+  bridge,
+  service,
+  engine,
+  forwarder,
+  interception,
+  telegram,
+}
 
 @immutable
 class RuntimeStatusItem {
@@ -84,6 +91,25 @@ extension ProxyRuntimeSnapshotUi on ProxyRuntimeSnapshot {
 
   bool get hasFailure => state == ProxyRuntimeState.failed;
 
+  bool get hasPartialFailure {
+    return degraded ||
+        partialFailureCode != null ||
+        partialFailureMessage != null;
+  }
+
+  bool get hasVerifiedInterception {
+    return interceptionReady &&
+        (platform != ProxyPlatform.linux ||
+            (queueRegistered && nftRulesInstalled));
+  }
+
+  bool get isOperational {
+    return state == ProxyRuntimeState.running &&
+        serviceActive &&
+        hasVerifiedInterception &&
+        !hasPartialFailure;
+  }
+
   bool get hasRuntimeActivity {
     return serviceActive ||
         state == ProxyRuntimeState.starting ||
@@ -96,9 +122,16 @@ extension ProxyRuntimeSnapshotUi on ProxyRuntimeSnapshot {
       return 'Сбой';
     }
 
+    if (hasPartialFailure) {
+      return 'Частичный сбой';
+    }
+
     if (state == ProxyRuntimeState.running) {
-      if (tunnelActive && trafficForwarderReady) {
-        return 'Туннель активен';
+      if (isOperational) {
+        return 'Защита активна';
+      }
+      if (trafficInterceptionActive && !hasVerifiedInterception) {
+        return 'Перехват не готов';
       }
       if (serviceActive && strategyEngineReady) {
         return 'Ядро готово';
@@ -115,7 +148,10 @@ extension ProxyRuntimeSnapshotUi on ProxyRuntimeSnapshot {
     if (hasFailure) {
       return RuntimeStatusTone.danger;
     }
-    if (tunnelActive && trafficForwarderReady) {
+    if (hasPartialFailure) {
+      return RuntimeStatusTone.warning;
+    }
+    if (isOperational) {
       return RuntimeStatusTone.success;
     }
     if (state == ProxyRuntimeState.starting ||
@@ -126,5 +162,30 @@ extension ProxyRuntimeSnapshotUi on ProxyRuntimeSnapshot {
       return RuntimeStatusTone.warning;
     }
     return RuntimeStatusTone.neutral;
+  }
+}
+
+extension TelegramSidecarStateUi on TelegramSidecarState {
+  String get label => switch (this) {
+    TelegramSidecarState.unavailable => 'Недоступен',
+    TelegramSidecarState.idle => 'Ожидает',
+    TelegramSidecarState.starting => 'Запуск',
+    TelegramSidecarState.running => 'Активен',
+    TelegramSidecarState.stopping => 'Остановка',
+    TelegramSidecarState.failed => 'Сбой',
+  };
+
+  RuntimeStatusTone get tone => switch (this) {
+    TelegramSidecarState.running => RuntimeStatusTone.success,
+    TelegramSidecarState.starting ||
+    TelegramSidecarState.stopping => RuntimeStatusTone.info,
+    TelegramSidecarState.failed => RuntimeStatusTone.danger,
+    TelegramSidecarState.unavailable ||
+    TelegramSidecarState.idle => RuntimeStatusTone.neutral,
+  };
+
+  bool get isTransitioning {
+    return this == TelegramSidecarState.starting ||
+        this == TelegramSidecarState.stopping;
   }
 }

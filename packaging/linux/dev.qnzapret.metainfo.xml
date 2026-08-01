@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.qnzapret.QNZapret</id>
+  <name>QNZapret</name>
+  <summary>QNZapret — локальный DPI-bypass клиент для Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>
+      QNZapret управляет локальным NFQUEUE runtime через защищённую границу
+      D-Bus и Polkit. Графический интерфейс всегда работает без root.
+    </p>
+  </description>
+  <launchable type="desktop-id">dev.qnzapret.desktop</launchable>
+  <url type="homepage">https://github.com/QNIX-Dev/QNZapret</url>
+  <developer id="dev.qnzapret">
+    <name>QNIX Dev</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>qnzapret</binary>
+  </provides>
+  <releases>
+    <release version="0.0.6" date="2026-08-01"/>
+    <release version="0.0.5" date="2026-08-01"/>
+    <release version="0.0.4" date="2026-08-01"/>
+    <release version="0.0.3" date="2026-08-01"/>
+    <release version="0.0.2" date="2026-08-01"/>
+    <release version="0.0.1" date="2026-07-30"/>
+  </releases>
+</component>

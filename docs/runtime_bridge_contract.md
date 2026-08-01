@@ -78,8 +78,11 @@ abstract interface class ProxyRuntime {
 
 - `StubProxyRuntime` - stub для состояния, где нативный backend еще не подключен.
 - `AndroidProxyRuntime` - adapter поверх Android `MethodChannel`.
+- `LinuxProxyRuntime` - adapter поверх Linux `MethodChannel` и `EventChannel`.
 - `ProxyRuntimeController` - UI/application facade над `ProxyRuntime`, который хранит snapshot, busy/error state и default launch config.
-- `createDefaultProxyRuntime()` - composition helper: на Android возвращает `AndroidProxyRuntime`, на Linux/Windows возвращает stub-адаптеры до появления desktop runtime.
+- `createDefaultProxyRuntime()` - composition helper: на Android возвращает
+  `AndroidProxyRuntime`, на Linux — `LinuxProxyRuntime`, на Windows —
+  stub-адаптер.
 - `RuntimeController` в `lib/core/state/runtime_controller.dart` - Riverpod application layer, который превращает `ProxyRuntimeController` в продуктовые CTA, status chips и локальные diagnostic logs.
 
 Рекомендуемая точка входа для frontend:
@@ -100,8 +103,8 @@ await controller.stop();
 enum ProxyPlatform { android, linux, windows }
 ```
 
-Текущий реальный adapter начат только для Android.
-Linux и Windows должны по возможности прийти к той же Dart-поверхности runtime.
+Реальные adapters подключены для Android и Linux; Windows должен прийти к той
+же Dart-поверхности runtime.
 
 ## Runtime states
 
@@ -205,7 +208,9 @@ Wire payload:
 - `qnzapret/payloads/tls_clienthello_www_google_com.bin`
 - `qnzapret/payloads/quic_initial_www_google_com.bin`
 
-Эти файлы лежат в `android/app/src/main/assets/qnzapret/` и попадают в APK как Android assets.
+Canonical files live in `runtime/assets/qnzapret/`. Android Gradle mounts
+`runtime/assets` as the `main` assets source set, so APK wire paths remain
+`qnzapret/...` without a duplicate checked-in asset tree.
 `QnzapretAndroidRuntime` проверяет их наличие через `StrategyAssetVerifier`, загружает payload blobs через `StrategyAssetStore`, регистрирует lazy hostlist matchers и добавляет результат в runtime message/snapshot.
 
 Поддерживаемые Dart-модели:
@@ -341,12 +346,23 @@ Local strategy proxy path сейчас умеет:
 - `strategyEngineReady`
 - `trafficForwarderReady`
 - `tunnelActive`
+- `trafficInterceptionMode`
+- `trafficInterceptionActive`
+- `queueRegistered`
+- `nftRulesInstalled`
+- `interceptionReady`
 - `packetCodecReady`
 - `udpForwarderReady`
 - `ipv6PacketCodecReady`
 - `ipv6UdpForwarderReady`
 - `tcpForwarderReady`
 - `activeProfileName`
+- `backendVersion`
+- `runtimeOwnerUid`
+- `telegramSidecarState`
+- `degraded`
+- `partialFailureCode`
+- `partialFailureMessage`
 - `telegramCompatibilityProxyReady`
 - `telegramCompatibilitySetupRequired`
 - `telegramCompatibilityProxyEndpoint`
@@ -609,6 +625,125 @@ Native return values:
 2. Store получает `stopping`.
 3. Android service останавливается.
 4. Store возвращается в `idle`.
+
+## Platform-neutral interception semantics
+
+`tunnelActive` сохранён для обратной совместимости и означает только Android
+TUN. Общая готовность перехвата описывается двумя полями:
+
+- `trafficInterceptionMode`: `none`, `androidVpnTun` или `linuxNfqueue`;
+- `trafficInterceptionActive`: реальный active state выбранного механизма.
+
+Старый Android payload без новых полей безопасно преобразуется:
+`tunnelActive=true` означает `androidVpnTun` и
+`trafficInterceptionActive=true`. Linux всегда возвращает
+`tunnelActive=false`, даже когда NFQUEUE полностью активна.
+
+Дополнительные обратно совместимые поля:
+
+- `backendVersion` — версия platform runtime API;
+- `runtimeOwnerUid` — UID владельца активной Linux transaction.
+- `queueRegistered` — NFQUEUE 200 зарегистрирована worker-процессом;
+- `nftRulesInstalled` — атомарная `inet qnzapret` transaction применена;
+- `interceptionReady` — queue и rules одновременно готовы;
+- `telegramSidecarState` — `unavailable`, `idle`, `starting`, `running`,
+  `stopping` или `failed`;
+- `degraded`, `partialFailureCode`, `partialFailureMessage` — честное
+  представление частичного отказа.
+
+Legacy Android payload не обязан передавать Linux queue/rules fields:
+`interceptionReady` выводится из `tunnelActive && trafficForwarderReady`.
+Legacy Linux payload выводит queue/rules из старых engine/forwarder flags.
+
+## Linux D-Bus contract
+
+Flutter использует прежний MethodChannel `dev.qnzapret/proxy_runtime`.
+Linux runner адаптирует его к system D-Bus:
+
+- bus `dev.qnzapret.Runtime1`;
+- object `/dev/qnzapret/Runtime1`;
+- interface `dev.qnzapret.Runtime1`;
+- methods `GetVersion`, `Prepare`, `GetSnapshot`, `Start`, `Stop`;
+- signals `SnapshotChanged(a{sv})`, `LogEvent(a{sv})`.
+
+`Start` получает строго сериализованный `StrategyProfile`. Root daemon
+повторно валидирует все поля и компилирует только allowlisted HTTP/TLS/QUIC
+rules. Пути, порты, actions и queue ID нельзя подменить из UI.
+
+Linux adapter maps the portable default to a real-smoke-verified profile for
+the pinned zapret2 `v0.9.5.2` binary. HTTP/TLS use `out-range=-d5`, two fakes
+with `tcp_ts=-100`, then `multisplit(seqovl=2,pos=midsld,tcp_ts_up)`; TLS binds
+the canonical `tls_google` blob. QUIC binds `quic_google`, applies autottl
+`-1,3-10`, repeats twice and sends disordered fragments at UDP position 8.
+`bind-fix4/6` is enabled. NFQUEUE topology uses postrouting/prerouting
+priorities `101/-101`, predefrag `-401`, mark guard `0x40000000`, packet
+windows TCP `20/10` and UDP `5/3`, counters and `bypass`.
+
+Mutating D-Bus methods авторизуются Polkit action
+`dev.qnzapret.runtime.manage` по реальному unique bus sender. Переданный
+клиентом UID не используется как источник доверия.
+
+Telegram sidecar использует session D-Bus:
+
+- bus `dev.qnzapret.Telegram1`;
+- object `/dev/qnzapret/Telegram1`;
+- interface `dev.qnzapret.Telegram1`;
+- methods `Prepare`, `GetSnapshot`, `Start`, `Stop`, `Retry`,
+  `GetSetupUri`;
+- signals `SnapshotChanged(a{sv})`, `LogEvent(a{sv})`.
+
+Linux EventChannel `dev.qnzapret/proxy_runtime/events` публикует:
+
+```dart
+{'type': 'snapshot', 'snapshot': <platform-neutral map>}
+{'type': 'log', 'log': {
+  'timestampMillis': int,
+  'level': 'debug|info|warning|error',
+  'source': String,
+  'code': String,
+  'message': String,
+}}
+```
+
+`RuntimeController` объединяет native events и локальные application events в
+bounded ring buffer на 240 записей.
+
+### Linux snapshot
+
+- `backendConnected` — system daemon доступен;
+- `serviceActive` — runtime transaction активна;
+- `strategyEngineReady` — `nfqws2` жив и queue зарегистрирована;
+- `trafficForwarderReady` — собственная nftables transaction применена;
+- `trafficInterceptionActive` — `inet qnzapret` активна;
+- `queueRegistered` — `/proc/net/netfilter/nfnetlink_queue` содержит 200;
+- `nftRulesInstalled` — собственная nft transaction завершилась успешно;
+- `interceptionReady` — оба предыдущих условия истинны;
+- `trafficInterceptionMode=linuxNfqueue`;
+- `tunnelActive=false`;
+- Telegram flags приходят из user-session sidecar и означают listener /
+  подтверждённый handshake+upstream bridge, а не факт открытия setup URI.
+- `running` не считается полноценным успехом при `interceptionReady=false`
+  или `degraded=true`.
+
+### Stable Linux errors
+
+- `linux_backend_unavailable`
+- `linux_backend_version_mismatch`
+- `linux_authorization_denied`
+- `linux_nft_unavailable`
+- `linux_nfqueue_unavailable`
+- `linux_queue_conflict`
+- `linux_profile_parse_rejected`
+- `linux_profile_dry_run_nonzero`
+- `linux_profile_dry_run_signaled`
+- `linux_profile_dry_run_spawn_failed`
+- `linux_nfqws_spawn_failed`
+- `linux_queue_registration_timeout`
+- `linux_nft_transaction_failed`
+- `linux_nfqws_unexpected_exit`
+- `linux_runtime_owned_by_other_user`
+- `linux_telegram_start_failed`
+- `linux_stop_failed`
 
 ## Требования к будущей backend-реализации
 

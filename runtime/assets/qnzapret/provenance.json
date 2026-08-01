@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "name": "zapret2",
+      "upstream": "https://github.com/bol-van/zapret2",
+      "version": "v0.9.5.2",
+      "commit": "7a69d56a4b35f814fb2d42e7bddb2f21c2314ff9",
+      "releaseArchiveSha256": "4f8612fc617c9a1937ca215f85bb6d7005f5455e152a8f7f1dd666c38a080dc8",
+      "artifact": "bin/nfqws2",
+      "artifactSha256": "31bb9f5ce03c6f5389d89ebcc3fdbb5db661b8679dd5f75d86da05d4bcfd27ed",
+      "license": "MIT"
+    },
+    {
+      "name": "tg-ws-proxy",
+      "upstream": "https://github.com/Flowseal/tg-ws-proxy",
+      "version": "v1.7.0",
+      "commit": "0eebdff69e7cdc2a2babe2de86e1f89a8cf35374",
+      "packagedSubset": "headless proxy Python package",
+      "localPatches": [
+        "secret-file input instead of command-line secret",
+        "redacted startup output",
+        "mode-0600 listener/upstream health marker"
+      ],
+      "license": "MIT"
+    },
+    {
+      "name": "QNZapret strategy lists and payloads",
+      "origin": "QNZapret Git history",
+      "introducedByCommit": "de2051edc395086a0ef1515f28b8a6eec566a014",
+      "listGeneralLastUpdatedByCommit": "4e9f15d15175aeee430de426a5e2dfca5ceba6f9",
+      "externalSourceRecordedInHistory": false,
+      "license": "QNZapret project distribution; upstream provenance was not recorded before canonicalization"
+    }
+  ]
+}

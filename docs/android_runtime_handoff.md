@@ -181,7 +181,8 @@ QNZapretProxy: socks5 strategy proxy stopped
 - проверить Telegram compatibility smoke без локального `telegram_compat.json`: public Flowseal upstream domains должны fetched/decoded/cached, CF probe должен найти HTTP 101 route или честно показать failed;
 - проверить Telegram compatibility smoke с локальным clean-room `telegram_compat.json`, где задан свой рабочий CF base domain; local domain должен иметь priority выше public defaults;
 - спроектировать production-канал поставки signed QNZapret route config, чтобы пользователю не нужно было вводить домены руками;
-- добавить production log stream в Dart runtime contract;
+- подключить Android native log stream к уже существующему
+  platform-neutral `ProxyRuntimeLogEvent` (Linux path реализован);
 - усилить local SOCKS5 proxy: write backpressure, лимиты сессий, counters contract и диагностика;
 - расширить QUIC correlation для DoH/DoT, DNS cache misses и сложных multi-IP сценариев;
 - позже описать equivalent bridge strategy для Linux и Windows.

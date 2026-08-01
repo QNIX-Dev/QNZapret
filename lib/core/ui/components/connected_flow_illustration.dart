@@ -39,9 +39,9 @@ class ConnectedFlowIllustration extends StatelessWidget {
           return CustomPaint(
             painter: _ConnectedFlowPainter(
               progress: animatedProgress,
-              hasFailure: snapshot.hasFailure,
-              isRunning: snapshot.serviceActive,
-              tunnelActive: snapshot.tunnelActive,
+              hasFailure: snapshot.hasFailure || snapshot.hasPartialFailure,
+              isRunning: snapshot.isOperational,
+              interceptionActive: snapshot.interceptionReady,
               primary: theme.colorScheme.primary,
               secondary: theme.colorScheme.secondary,
               tertiary: theme.colorScheme.tertiary,
@@ -56,10 +56,10 @@ class ConnectedFlowIllustration extends StatelessWidget {
   }
 
   double _progressFor(ProxyRuntimeSnapshot snapshot) {
-    if (snapshot.hasFailure) {
+    if (snapshot.hasFailure || snapshot.hasPartialFailure) {
       return 0.74;
     }
-    if (snapshot.tunnelActive && snapshot.trafficForwarderReady) {
+    if (snapshot.isOperational) {
       return 1;
     }
     if (snapshot.strategyEngineReady) {
@@ -86,7 +86,7 @@ class _ConnectedFlowPainter extends CustomPainter {
     required this.progress,
     required this.hasFailure,
     required this.isRunning,
-    required this.tunnelActive,
+    required this.interceptionActive,
     required this.primary,
     required this.secondary,
     required this.tertiary,
@@ -98,7 +98,7 @@ class _ConnectedFlowPainter extends CustomPainter {
   final double progress;
   final bool hasFailure;
   final bool isRunning;
-  final bool tunnelActive;
+  final bool interceptionActive;
   final Color primary;
   final Color secondary;
   final Color tertiary;
@@ -132,7 +132,7 @@ class _ConnectedFlowPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4
       ..strokeCap = StrokeCap.round
-      ..color = tunnelActive
+      ..color = interceptionActive
           ? secondary.withValues(alpha: 0.96)
           : primary.withValues(alpha: 0.72);
 
@@ -226,7 +226,7 @@ class _ConnectedFlowPainter extends CustomPainter {
     return oldDelegate.progress != progress ||
         oldDelegate.hasFailure != hasFailure ||
         oldDelegate.isRunning != isRunning ||
-        oldDelegate.tunnelActive != tunnelActive ||
+        oldDelegate.interceptionActive != interceptionActive ||
         oldDelegate.primary != primary ||
         oldDelegate.secondary != secondary ||
         oldDelegate.tertiary != tertiary ||

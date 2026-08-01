@@ -145,12 +145,19 @@ void main() {
     expect(snapshot.strategyEngineReady, isTrue);
     expect(snapshot.trafficForwarderReady, isFalse);
     expect(snapshot.tunnelActive, isFalse);
+    expect(snapshot.trafficInterceptionMode, TrafficInterceptionMode.none);
+    expect(snapshot.trafficInterceptionActive, isFalse);
+    expect(snapshot.queueRegistered, isFalse);
+    expect(snapshot.nftRulesInstalled, isFalse);
+    expect(snapshot.interceptionReady, isFalse);
     expect(snapshot.packetCodecReady, isTrue);
     expect(snapshot.udpForwarderReady, isTrue);
     expect(snapshot.ipv6PacketCodecReady, isTrue);
     expect(snapshot.ipv6UdpForwarderReady, isTrue);
     expect(snapshot.tcpForwarderReady, isFalse);
     expect(snapshot.activeProfileName, 'Default lightweight');
+    expect(snapshot.telegramSidecarState, TelegramSidecarState.running);
+    expect(snapshot.degraded, isFalse);
     expect(snapshot.telegramCompatibilityProxyReady, isTrue);
     expect(snapshot.telegramCompatibilitySetupRequired, isTrue);
     expect(snapshot.telegramCompatibilityProxyEndpoint, '127.0.0.1:1443');
@@ -159,6 +166,96 @@ void main() {
       'Telegram compatibility proxy слушает 127.0.0.1:1443.',
     );
   });
+
+  test('legacy Android tunnel payload maps to interception semantics', () {
+    final snapshot = ProxyRuntimeSnapshot.fromMap({
+      'platform': 'android',
+      'state': 'running',
+      'message': 'active',
+      'backendConnected': true,
+      'vpnPermissionGranted': true,
+      'serviceActive': true,
+      'strategyEngineReady': true,
+      'trafficForwarderReady': true,
+      'tunnelActive': true,
+    });
+
+    expect(
+      snapshot.trafficInterceptionMode,
+      TrafficInterceptionMode.androidVpnTun,
+    );
+    expect(snapshot.trafficInterceptionActive, isTrue);
+    expect(snapshot.interceptionReady, isTrue);
+    expect(snapshot.queueRegistered, isFalse);
+    expect(snapshot.nftRulesInstalled, isFalse);
+  });
+
+  test('legacy Linux readiness maps to detailed interception fields', () {
+    final snapshot = ProxyRuntimeSnapshot.fromMap({
+      'platform': 'linux',
+      'state': 'running',
+      'serviceActive': true,
+      'strategyEngineReady': true,
+      'trafficForwarderReady': true,
+      'trafficInterceptionMode': 'linuxNfqueue',
+      'trafficInterceptionActive': true,
+    });
+
+    expect(snapshot.queueRegistered, isTrue);
+    expect(snapshot.nftRulesInstalled, isTrue);
+    expect(snapshot.interceptionReady, isTrue);
+  });
+
+  test('snapshot parses explicit degraded Telegram sidecar failure', () {
+    final snapshot = ProxyRuntimeSnapshot.fromMap({
+      'platform': 'linux',
+      'state': 'running',
+      'serviceActive': true,
+      'strategyEngineReady': true,
+      'trafficForwarderReady': true,
+      'trafficInterceptionMode': 'linuxNfqueue',
+      'trafficInterceptionActive': true,
+      'queueRegistered': true,
+      'nftRulesInstalled': true,
+      'interceptionReady': true,
+      'telegramSidecarState': 'failed',
+      'degraded': true,
+      'partialFailureCode': 'linux_telegram_start_failed',
+      'partialFailureMessage': 'Telegram не запущен.',
+    });
+
+    expect(snapshot.queueRegistered, isTrue);
+    expect(snapshot.nftRulesInstalled, isTrue);
+    expect(snapshot.interceptionReady, isTrue);
+    expect(snapshot.telegramSidecarState, TelegramSidecarState.failed);
+    expect(snapshot.degraded, isTrue);
+    expect(snapshot.partialFailureCode, 'linux_telegram_start_failed');
+    expect(snapshot.partialFailureMessage, 'Telegram не запущен.');
+  });
+
+  test('partial failure details imply degraded state for compatibility', () {
+    final snapshot = ProxyRuntimeSnapshot.fromMap({
+      'platform': 'linux',
+      'state': 'running',
+      'partialFailureCode': 'linux_telegram_start_failed',
+    });
+
+    expect(snapshot.degraded, isTrue);
+  });
+
+  test(
+    'failed Telegram sidecar implies degraded even if wire flag is false',
+    () {
+      final snapshot = ProxyRuntimeSnapshot.fromMap({
+        'platform': 'linux',
+        'state': 'running',
+        'telegramSidecarState': 'failed',
+        'degraded': false,
+      });
+
+      expect(snapshot.degraded, isTrue);
+    },
+  );
 
   test('prepare result parses native response', () {
     final result = ProxyPrepareResult.fromMap({
