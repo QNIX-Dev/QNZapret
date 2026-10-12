@@ -1,46 +1,51 @@
-# Linux packaging
+# Linux: сборка и установка
 
-## Supported packages
+Срез ветки `quriee`, 12 октября 2026 года. Packaging предназначен для Linux
+x86_64 с systemd: DEB (Debian 12/Ubuntu 24.04+) и RPM (Fedora 44).
+Текущая поставка проверена на Ubuntu 26.04; остальные clean-VM smoke — отдельно.
 
-The production pipeline generates:
+## Сборка
 
-- `.deb` for Debian 12 and Ubuntu 24.04+ (`amd64`);
-- `.rpm` for Fedora 44 (`x86_64`);
-- a relocatable Flutter bundle as the input to both packages.
-
-Build:
+Локально:
 
 ```bash
-packaging/linux/build_bundle_debian12.sh
+flutter pub get
+flutter build linux --release
 bash packaging/linux/build_packages.sh
 ```
 
-The bundle is built in a temporary source copy inside Debian 12 from a
-read-only repository mount. Only the completed bundle is copied back. This
-keeps glibc compatibility and prevents container paths from leaking into the
-host `.dart_tool/package_config.json`; host `flutter analyze --no-pub` and
-`flutter test --no-pub` remain usable immediately after the build.
+Нужны C++/clang, CMake, Ninja, pkg-config, GTK3/GIO development packages,
+Python 3 и release Flutter SDK. Packaging script собирает **оба** формата:
+требует `rpmbuild` даже если нужен только DEB. Для DEB используется `dpkg-deb`
+или fallback ar/tar. Выход — `build/linux/packages/`, SHA256 выводятся в журнал.
+Версия в script/spec/метаданных пакета сейчас `0.0.6`.
 
-Artifacts are written to `build/linux/packages/` and printed with SHA256.
+Локальный bundle наследует glibc baseline хоста. Для Debian 12-compatible
+bundle используйте Podman и реальный путь к SDK:
 
-## Installed layout
+```bash
+export QNZAPRET_FLUTTER_DIR=/absolute/path/to/flutter
+bash packaging/linux/build_bundle_debian12.sh
+bash packaging/linux/build_packages.sh
+```
+
+По умолчанию script ищет SDK в `~/.dev/flutter`. Исходники монтируются read-only,
+в Debian 12 создаётся временная копия без `.git`, `.dart_tool` и build; обратно
+копируется bundle. Host package_config не заменяется контейнерными путями.
+Нужны сеть и место для SDK/dependencies. Скрипт монтирует SDK в контейнер;
+использовать рабочую копию SDK, которую допустимо обновлять Flutter tooling.
+
+## Установленный состав
 
 ```text
-/opt/qnzapret/
-  qnzapret
-  data/
-  lib/
-/usr/bin/qnzapret -> /opt/qnzapret/qnzapret
+/opt/qnzapret/{qnzapret,data/,lib/}
+/usr/bin/qnzapret -> ../../opt/qnzapret/qnzapret
 /usr/libexec/qnzapret-runtime
 /usr/libexec/qnzapret-telegram-sidecar
-/usr/lib/qnzapret/runtime/
-  bin/nfqws2
-  lua/
-  lists/
-  payloads/
-  manifest.sha256
-  provenance.json
+/usr/libexec/qnzapret-component-updater.py
+/usr/lib/qnzapret/runtime/{bin/,lua/,lists/,payloads/,manifest.sha256,provenance.json}
 /usr/lib/qnzapret/telegram/proxy/
+/usr/lib/qnzapret/telegram/adapter/qnzapret_telegram.py
 /usr/lib/systemd/system/qnzapret-runtime.service
 /usr/lib/systemd/user/qnzapret-telegram.service
 /usr/share/dbus-1/system-services/dev.qnzapret.Runtime1.service
@@ -49,81 +54,67 @@ Artifacts are written to `build/linux/packages/` and printed with SHA256.
 /usr/share/polkit-1/actions/dev.qnzapret.runtime.policy
 /usr/share/applications/dev.qnzapret.desktop
 /usr/share/metainfo/dev.qnzapret.metainfo.xml
+/usr/share/doc/qnzapret/
 ```
 
-Runtime dependencies:
+System state: `/run/qnzapret` (0750), `/var/lib/qnzapret` (0755), cache в
+`/var/lib/qnzapret/components`. User state: systemd StateDirectory или XDG,
+0700; secret и health — 0600. Обновления не переписывают package-owned `/usr/lib`.
 
-- systemd and D-Bus;
-- nftables;
-- Polkit;
-- Python 3 and distribution `python3-cryptography` for the pinned official
-  Telegram headless core;
-- GTK/Flutter libraries bundled with the app.
+Зависимости runtime: systemd, D-Bus, nftables, Polkit, Python 3, cryptography,
+certifi, httpx, h2, ca-certificates, GTK3/GLib и стандартные runtime libraries.
+Это системные пакеты, без pip install/venv/download interpreter на старте.
+Точные DEB/RPM dependency expressions находятся в build script/spec.
 
-Python was retained only for the upstream MIT Telegram protocol core: it avoids
-a new clean-room MTProxy cryptography implementation and keeps behavior aligned
-with the pinned upstream. There is no network install, virtualenv creation,
-tray UI or interpreter download at runtime.
-
-## Installation
-
-Debian/Ubuntu:
+## Установка и обновление пакета
 
 ```bash
 sudo apt install ./build/linux/packages/qnzapret_0.0.6_amd64.deb
-```
-
-Fedora:
-
-```bash
+# Fedora:
 sudo dnf install ./build/linux/packages/qnzapret-0.0.6-1.*.x86_64.rpm
 ```
 
-Package installation may ask for root. Normal app use must not.
+GUI запускать обычным пользователем. Start/Stop используют Polkit; не выдавать
+приложению постоянный sudo и не запускать Flutter GUI от root.
 
-## Package lifecycle
+Post-install создаёт locked account `qnzapret-runtime`, state directories и
+перечитывает systemd/system + активные user managers. Новая установка сама
+не включает перехват. Snapshot активирует helpers через D-Bus; Start запускает
+worker. Подробности: [Linux runtime](linux_runtime_handoff.md).
 
-Post-install:
-
-- creates locked system user `qnzapret-runtime`;
-- creates `/run/qnzapret` and `/var/lib/qnzapret`;
-- reloads systemd and active user managers, so an upgrade cannot retain an
-  obsolete Telegram sandbox definition;
-- leaves runtime stopped until D-Bus activation or user Start.
-
-Remove:
-
-- stops `qnzapret-runtime.service`;
-- calls the QNZapret-only cleanup helper;
-- attempts to stop active user sidecars;
-- removes packaged files;
-- preserves user XDG settings and Telegram secret.
-
-Purge additionally removes the system user and empty system state directory.
-Neither path deletes user preferences automatically or modifies foreign
-firewall tables.
-
-## Package QA
-
-Static:
+**DEB upgrade не перезапускает живые helpers автоматически**: prerm останавливает
+их только при remove/purge, postinst выполняет daemon-reload. Для применения
+нового кода: Stop в GUI, закрыть GUI, остановить старые helpers, затем открыть
+новый GUI/Start. При остановленных сервисах:
 
 ```bash
+sudo systemctl stop qnzapret-runtime.service
+systemctl --user stop qnzapret-telegram.service
+```
+
+Это отличается от автообновления компонентов при Start; последнее не обновляет
+GUI/system helper. RPM использует systemd post/preun/postun macros; его upgrade
+нужно проверять отдельно на Fedora.
+
+Remove останавливает system runtime, очищает свою nft table и пытается остановить
+active user sidecars; user preferences/secret сохраняются. DEB purge удаляет
+account и **только пустой** `/var/lib/qnzapret`: заполненный cache автоматически
+не стирается. Чужой firewall, hosts и DNS не меняются.
+
+## Проверки пакетов
+
+```bash
+bash packaging/linux/tests/verify_packaging.sh
 desktop-file-validate packaging/linux/dev.qnzapret.desktop
 appstreamcli validate --no-net packaging/linux/dev.qnzapret.metainfo.xml
 systemd-analyze verify packaging/linux/systemd/qnzapret-runtime.service
-systemd-analyze --user verify \
-  packaging/linux/systemd/qnzapret-telegram.service
-```
-
-Artifact inspection:
-
-```bash
+systemd-analyze --user verify packaging/linux/systemd/qnzapret-telegram.service
+dpkg-deb --info build/linux/packages/qnzapret_0.0.6_amd64.deb
 rpm -qpl build/linux/packages/*.rpm
 rpm -qpR build/linux/packages/*.rpm
-ar t build/linux/packages/*.deb
-cd /usr/lib/qnzapret/runtime && sha256sum -c manifest.sha256
+(cd /usr/lib/qnzapret/runtime && sha256sum -c manifest.sha256)
 ```
 
-Manual clean-VM smoke must verify Start with Polkit, actual HTTP/HTTPS/QUIC,
-target resources, Telegram setup/bridge, GUI restart snapshot restoration,
-Stop, forced `nfqws2` crash, reboot recovery and uninstall cleanup.
+Артефакт, собранный на новой Ubuntu, не объявлять проверенным для Debian 12.
+Чистая VM должна подтвердить dependencies, Polkit Start, HTTP/HTTPS/QUIC,
+Telegram setup/bridge, upgrade, crash, reboot и uninstall. Полный [QA](integration_workflow.md).

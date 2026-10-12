@@ -1,5 +1,3 @@
-#include "runtime_contract.h"
-
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <sys/file.h>
@@ -20,6 +18,9 @@
 #include <string>
 #include <vector>
 
+#include "component_paths.h"
+#include "runtime_contract.h"
+
 namespace {
 
 std::string g_asset_root = "/usr/lib/qnzapret/runtime";
@@ -28,6 +29,7 @@ std::string g_nfqws_path = "/usr/lib/qnzapret/runtime/bin/nfqws2";
 bool g_integration_test = false;
 bool g_integration_ready = false;
 bool g_integration_failed = false;
+std::string g_rejected_runtime_root;
 constexpr char kPolkitAction[] = "dev.qnzapret.runtime.manage";
 
 const char kIntrospectionXml[] = R"XML(
@@ -80,21 +82,15 @@ struct DaemonState {
 DaemonState g_state;
 GMainLoop* g_loop = nullptr;
 
-std::string LockPath() {
-  return g_runtime_directory + "/runtime.lock";
-}
+std::string LockPath() { return g_runtime_directory + "/runtime.lock"; }
 
 std::string ActiveProfilePath() {
   return g_runtime_directory + "/active-profile";
 }
 
-std::string ManifestPath() {
-  return g_asset_root + "/manifest.sha256";
-}
+std::string ManifestPath() { return g_asset_root + "/manifest.sha256"; }
 
-std::int64_t NowMillis() {
-  return g_get_real_time() / 1000;
-}
+std::int64_t NowMillis() { return g_get_real_time() / 1000; }
 
 GVariant* SnapshotVariant() {
   GVariantBuilder builder;
@@ -105,39 +101,38 @@ GVariant* SnapshotVariant() {
                         g_variant_new_string(g_state.snapshot.state.c_str()));
   g_variant_builder_add(&builder, "{sv}", "message",
                         g_variant_new_string(g_state.snapshot.message.c_str()));
-  g_variant_builder_add(&builder, "{sv}", "backendConnected",
-                        g_variant_new_boolean(
-                            g_state.snapshot.backend_connected));
+  g_variant_builder_add(
+      &builder, "{sv}", "backendConnected",
+      g_variant_new_boolean(g_state.snapshot.backend_connected));
   g_variant_builder_add(&builder, "{sv}", "vpnPermissionGranted",
                         g_variant_new_boolean(true));
   g_variant_builder_add(&builder, "{sv}", "serviceActive",
-                        g_variant_new_boolean(
-                            g_state.snapshot.service_active));
-  g_variant_builder_add(&builder, "{sv}", "strategyEngineReady",
-                        g_variant_new_boolean(
-                            g_state.snapshot.strategy_engine_ready));
-  g_variant_builder_add(&builder, "{sv}", "trafficForwarderReady",
-                        g_variant_new_boolean(
-                            g_state.snapshot.traffic_forwarder_ready));
+                        g_variant_new_boolean(g_state.snapshot.service_active));
+  g_variant_builder_add(
+      &builder, "{sv}", "strategyEngineReady",
+      g_variant_new_boolean(g_state.snapshot.strategy_engine_ready));
+  g_variant_builder_add(
+      &builder, "{sv}", "trafficForwarderReady",
+      g_variant_new_boolean(g_state.snapshot.traffic_forwarder_ready));
   g_variant_builder_add(&builder, "{sv}", "tunnelActive",
                         g_variant_new_boolean(false));
-  g_variant_builder_add(&builder, "{sv}", "trafficInterceptionMode",
-                        g_variant_new_string(
-                            g_state.snapshot.traffic_interception_active
-                                ? "linuxNfqueue"
-                                : "none"));
-  g_variant_builder_add(&builder, "{sv}", "trafficInterceptionActive",
-                        g_variant_new_boolean(
-                            g_state.snapshot.traffic_interception_active));
-  g_variant_builder_add(&builder, "{sv}", "queueRegistered",
-                        g_variant_new_boolean(
-                            g_state.snapshot.queue_registered));
-  g_variant_builder_add(&builder, "{sv}", "nftRulesInstalled",
-                        g_variant_new_boolean(
-                            g_state.snapshot.nft_rules_installed));
-  g_variant_builder_add(&builder, "{sv}", "interceptionReady",
-                        g_variant_new_boolean(
-                            g_state.snapshot.interception_ready));
+  g_variant_builder_add(
+      &builder, "{sv}", "trafficInterceptionMode",
+      g_variant_new_string(g_state.snapshot.traffic_interception_active
+                               ? "linuxNfqueue"
+                               : "none"));
+  g_variant_builder_add(
+      &builder, "{sv}", "trafficInterceptionActive",
+      g_variant_new_boolean(g_state.snapshot.traffic_interception_active));
+  g_variant_builder_add(
+      &builder, "{sv}", "queueRegistered",
+      g_variant_new_boolean(g_state.snapshot.queue_registered));
+  g_variant_builder_add(
+      &builder, "{sv}", "nftRulesInstalled",
+      g_variant_new_boolean(g_state.snapshot.nft_rules_installed));
+  g_variant_builder_add(
+      &builder, "{sv}", "interceptionReady",
+      g_variant_new_boolean(g_state.snapshot.interception_ready));
   g_variant_builder_add(&builder, "{sv}", "packetCodecReady",
                         g_variant_new_boolean(false));
   g_variant_builder_add(&builder, "{sv}", "udpForwarderReady",
@@ -154,15 +149,12 @@ GVariant* SnapshotVariant() {
   g_variant_builder_add(&builder, "{sv}", "backendVersion",
                         g_variant_new_string(qnzapret::kRuntimeVersion));
   if (g_state.snapshot.owner_uid >= 0) {
-    g_variant_builder_add(
-        &builder, "{sv}", "runtimeOwnerUid",
-        g_variant_new_int64(g_state.snapshot.owner_uid));
+    g_variant_builder_add(&builder, "{sv}", "runtimeOwnerUid",
+                          g_variant_new_int64(g_state.snapshot.owner_uid));
   }
-  g_variant_builder_add(&builder, "{sv}",
-                        "telegramCompatibilityProxyReady",
+  g_variant_builder_add(&builder, "{sv}", "telegramCompatibilityProxyReady",
                         g_variant_new_boolean(false));
-  g_variant_builder_add(&builder, "{sv}",
-                        "telegramCompatibilitySetupRequired",
+  g_variant_builder_add(&builder, "{sv}", "telegramCompatibilitySetupRequired",
                         g_variant_new_boolean(false));
   return g_variant_builder_end(&builder);
 }
@@ -193,12 +185,10 @@ void EmitSnapshot() {
       g_variant_new("(@a{sv})", SnapshotVariant()), nullptr);
 }
 
-void EmitLog(const char* level,
-             const char* code,
+void EmitLog(const char* level, const char* code,
              const std::string& raw_message) {
-  qnzapret::RuntimeLogEvent event{
-      NowMillis(), level, "linux-runtime", code,
-      qnzapret::RedactRuntimeMessage(raw_message)};
+  qnzapret::RuntimeLogEvent event{NowMillis(), level, "linux-runtime", code,
+                                  qnzapret::RedactRuntimeMessage(raw_message)};
   g_state.logs.push_back(event);
   while (g_state.logs.size() > 240) {
     g_state.logs.pop_front();
@@ -236,20 +226,17 @@ std::vector<const gchar*> Argv(const std::vector<std::string>& arguments) {
 }
 
 bool RunProcess(const std::vector<std::string>& arguments,
-                const std::string* stdin_text,
-                std::string* stdout_text,
+                const std::string* stdin_text, std::string* stdout_text,
                 std::string* error_text,
-                qnzapret::SubprocessTermination* termination,
-                int* status) {
+                qnzapret::SubprocessTermination* termination, int* status) {
   const auto argv = Argv(arguments);
   g_autoptr(GError) error = nullptr;
   g_autoptr(GSubprocess) process = g_subprocess_newv(
       argv.data(),
-      static_cast<GSubprocessFlags>(G_SUBPROCESS_FLAGS_STDOUT_PIPE |
-                                    G_SUBPROCESS_FLAGS_STDERR_PIPE |
-                                    (stdin_text == nullptr
-                                         ? G_SUBPROCESS_FLAGS_NONE
-                                         : G_SUBPROCESS_FLAGS_STDIN_PIPE)),
+      static_cast<GSubprocessFlags>(
+          G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_PIPE |
+          (stdin_text == nullptr ? G_SUBPROCESS_FLAGS_NONE
+                                 : G_SUBPROCESS_FLAGS_STDIN_PIPE)),
       &error);
   if (process == nullptr) {
     *termination = qnzapret::SubprocessTermination::kSpawnFailed;
@@ -299,8 +286,8 @@ bool DeleteOwnTable(std::string* error) {
   qnzapret::SubprocessTermination termination;
   int status = 0;
   const std::string rules = "delete table inet qnzapret\n";
-  if (!RunProcess({nft, "-f", "-"}, &rules, &output, &errors,
-                  &termination, &status)) {
+  if (!RunProcess({nft, "-f", "-"}, &rules, &output, &errors, &termination,
+                  &status)) {
     if (errors.find("No such file") != std::string::npos ||
         errors.find("No such") != std::string::npos) {
       return true;
@@ -382,8 +369,7 @@ bool VerifyAssets(std::string* error) {
       *error = "Manifest runtime assets поврежден.";
       return false;
     }
-    if (!VerifyFileSha256(g_asset_root + "/" + relative_path,
-                          hash)) {
+    if (!VerifyFileSha256(g_asset_root + "/" + relative_path, hash)) {
       *error = "Checksum не совпал для " + relative_path + ".";
       return false;
     }
@@ -404,8 +390,7 @@ bool AcquireLock(std::string* error) {
   }
   g_state.lock_fd =
       g_open(LockPath().c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0640);
-  if (g_state.lock_fd < 0 ||
-      flock(g_state.lock_fd, LOCK_EX | LOCK_NB) != 0) {
+  if (g_state.lock_fd < 0 || flock(g_state.lock_fd, LOCK_EX | LOCK_NB) != 0) {
     *error = "Другой экземпляр QNZapret уже владеет runtime lock.";
     if (g_state.lock_fd >= 0) {
       close(g_state.lock_fd);
@@ -442,8 +427,7 @@ std::int64_t SenderUid(GDBusMethodInvocation* invocation,
   return uid;
 }
 
-bool Authorize(GDBusMethodInvocation* invocation,
-               std::int64_t* sender_uid,
+bool Authorize(GDBusMethodInvocation* invocation, std::int64_t* sender_uid,
                std::string* error_text) {
   *sender_uid = SenderUid(invocation, error_text);
   if (*sender_uid < 0) {
@@ -484,8 +468,7 @@ bool Authorize(GDBusMethodInvocation* invocation,
   return true;
 }
 
-void ReturnError(GDBusMethodInvocation* invocation,
-                 const char* code,
+void ReturnError(GDBusMethodInvocation* invocation, const char* code,
                  const std::string& message) {
   const std::string name = std::string("dev.qnzapret.Error.") + code;
   g_dbus_method_invocation_return_dbus_error(invocation, name.c_str(),
@@ -534,8 +517,7 @@ void FinalizeCleanup(bool mark_idle) {
 
 gboolean ForceNfqwsStop(gpointer) {
   g_state.stop_timeout_id = 0;
-  if (g_state.nfqws_process != nullptr &&
-      !g_state.nfqws_wait_completed) {
+  if (g_state.nfqws_process != nullptr && !g_state.nfqws_wait_completed) {
     EmitLog("warning", "linux_nfqws_force_stop",
             "nfqws2 не завершился после SIGTERM; применен bounded force-exit.");
     g_subprocess_force_exit(g_state.nfqws_process);
@@ -550,8 +532,8 @@ void RequestProcessStop(bool mark_idle,
   g_state.cleanup_mark_idle = mark_idle;
   if (stop_invocation != nullptr &&
       g_state.pending_stop_invocation == nullptr) {
-    g_state.pending_stop_invocation = G_DBUS_METHOD_INVOCATION(
-        g_object_ref(stop_invocation));
+    g_state.pending_stop_invocation =
+        G_DBUS_METHOD_INVOCATION(g_object_ref(stop_invocation));
   }
   std::string cleanup_error;
   if (!DeleteOwnTable(&cleanup_error) && !cleanup_error.empty()) {
@@ -567,16 +549,14 @@ void RequestProcessStop(bool mark_idle,
   }
   g_subprocess_send_signal(g_state.nfqws_process, SIGTERM);
   if (g_state.stop_timeout_id == 0) {
-    g_state.stop_timeout_id =
-        g_timeout_add_seconds(3, ForceNfqwsStop, nullptr);
+    g_state.stop_timeout_id = g_timeout_add_seconds(3, ForceNfqwsStop, nullptr);
   }
 }
 
 void CleanupProcessForShutdown() {
   std::string cleanup_error;
   DeleteOwnTable(&cleanup_error);
-  if (g_state.nfqws_process != nullptr &&
-      !g_state.nfqws_wait_completed) {
+  if (g_state.nfqws_process != nullptr && !g_state.nfqws_wait_completed) {
     g_subprocess_force_exit(g_state.nfqws_process);
     g_subprocess_wait(g_state.nfqws_process, nullptr, nullptr);
   }
@@ -591,9 +571,8 @@ void CleanupProcessForShutdown() {
 void ReadNfqwsLine(GObject* source, GAsyncResult* result, gpointer) {
   g_autoptr(GError) error = nullptr;
   gsize length = 0;
-  g_autofree gchar* line =
-      g_data_input_stream_read_line_finish(G_DATA_INPUT_STREAM(source), result,
-                                           &length, &error);
+  g_autofree gchar* line = g_data_input_stream_read_line_finish(
+      G_DATA_INPUT_STREAM(source), result, &length, &error);
   if (line == nullptr) {
     return;
   }
@@ -601,15 +580,15 @@ void ReadNfqwsLine(GObject* source, GAsyncResult* result, gpointer) {
     g_printerr("nfqws2: %.*s\n", static_cast<int>(length), line);
   }
   EmitLog("debug", "linux_nfqws_output", std::string(line, length));
-  g_data_input_stream_read_line_async(
-      G_DATA_INPUT_STREAM(source), G_PRIORITY_DEFAULT, nullptr,
-      ReadNfqwsLine, nullptr);
+  g_data_input_stream_read_line_async(G_DATA_INPUT_STREAM(source),
+                                      G_PRIORITY_DEFAULT, nullptr,
+                                      ReadNfqwsLine, nullptr);
 }
 
 void NfqwsExited(GObject* source, GAsyncResult* result, gpointer) {
   g_autoptr(GError) error = nullptr;
-  const bool waited = g_subprocess_wait_finish(G_SUBPROCESS(source), result,
-                                                &error);
+  const bool waited =
+      g_subprocess_wait_finish(G_SUBPROCESS(source), result, &error);
   if (source != G_OBJECT(g_state.nfqws_process)) {
     return;
   }
@@ -628,16 +607,15 @@ void NfqwsExited(GObject* source, GAsyncResult* result, gpointer) {
     outcome = "signal=" +
               std::to_string(g_subprocess_get_term_sig(G_SUBPROCESS(source)));
   } else {
-    outcome = "exitCode=" + std::to_string(
-                                g_subprocess_get_exit_status(
-                                    G_SUBPROCESS(source)));
+    outcome =
+        "exitCode=" +
+        std::to_string(g_subprocess_get_exit_status(G_SUBPROCESS(source)));
   }
   if (g_integration_test) {
     g_printerr("integration nfqws exited: %s\n", outcome.c_str());
   }
   if (g_state.pending_start_invocation != nullptr) {
-    ReturnError(g_state.pending_start_invocation,
-                "linux_nfqws_unexpected_exit",
+    ReturnError(g_state.pending_start_invocation, "linux_nfqws_unexpected_exit",
                 "nfqws2 завершился до регистрации NFQUEUE: " + outcome);
     ClearPendingStart();
   }
@@ -648,9 +626,8 @@ void NfqwsExited(GObject* source, GAsyncResult* result, gpointer) {
   g_clear_object(&g_state.nfqws_output);
   g_clear_object(&g_state.nfqws_process);
   g_state.snapshot.state = "failed";
-  g_state.snapshot.message =
-      "nfqws2 неожиданно завершился (" + outcome +
-      "); правила перехвата удалены в fail-open режиме.";
+  g_state.snapshot.message = "nfqws2 неожиданно завершился (" + outcome +
+                             "); правила перехвата удалены в fail-open режиме.";
   g_state.snapshot.service_active = false;
   g_state.snapshot.strategy_engine_ready = false;
   g_state.snapshot.traffic_forwarder_ready = false;
@@ -684,15 +661,19 @@ bool StartNfqws(const qnzapret::CompiledProfile& profile,
   g_state.nfqws_wait_completed = false;
   g_state.nfqws_output = g_data_input_stream_new(
       g_subprocess_get_stdout_pipe(g_state.nfqws_process));
-  g_data_input_stream_read_line_async(g_state.nfqws_output,
-                                      G_PRIORITY_DEFAULT, nullptr,
-                                      ReadNfqwsLine, nullptr);
-  g_subprocess_wait_async(g_state.nfqws_process, nullptr, NfqwsExited,
-                          nullptr);
+  g_data_input_stream_read_line_async(g_state.nfqws_output, G_PRIORITY_DEFAULT,
+                                      nullptr, ReadNfqwsLine, nullptr);
+  g_subprocess_wait_async(g_state.nfqws_process, nullptr, NfqwsExited, nullptr);
   return true;
 }
 
 void FailPendingStart(const char* code, const std::string& message) {
+  if (!g_integration_test && g_asset_root != "/usr/lib/qnzapret/runtime") {
+    g_rejected_runtime_root = g_asset_root;
+    EmitLog("warning", "linux_component_rejected",
+            "Новый runtime не запустился; следующий запуск использует "
+            "встроенную версию.");
+  }
   if (g_state.pending_start_invocation != nullptr) {
     ReturnError(g_state.pending_start_invocation, code, message);
   }
@@ -729,8 +710,8 @@ gboolean PollQueueReadiness(gpointer) {
   std::string errors;
   qnzapret::SubprocessTermination termination;
   int status = 0;
-  if (!RunProcess({nft, "-f", "-"}, &rules, &output, &errors,
-                  &termination, &status)) {
+  if (!RunProcess({nft, "-f", "-"}, &rules, &output, &errors, &termination,
+                  &status)) {
     g_state.queue_poll_id = 0;
     const auto details = errors.empty() ? output : errors;
     const auto failure = qnzapret::MapSubprocessFailure(
@@ -800,9 +781,9 @@ bool RunPreflight(std::string* code, std::string* error) {
   }
 
   qnzapret::CompiledProfile compiled;
-  if (!qnzapret::CompileStrategyProfile(
-          qnzapret::DefaultStrategyProfileWire(), g_asset_root,
-          qnzapret::kQueueNumber, &compiled, error)) {
+  if (!qnzapret::CompileStrategyProfile(qnzapret::DefaultStrategyProfileWire(),
+                                        g_asset_root, qnzapret::kQueueNumber,
+                                        &compiled, error)) {
     *code = "linux_profile_parse_rejected";
     return false;
   }
@@ -812,11 +793,10 @@ bool RunPreflight(std::string* code, std::string* error) {
   int status = 0;
   if (!RunProcess({g_nfqws_path, "--version"}, nullptr, &output, &errors,
                   &termination, &status) ||
-      output.find("v0.9.5.2") == std::string::npos ||
-      output.find("7a69d56a4b35f814fb2d42e7bddb2f21c2314ff9") ==
-          std::string::npos) {
+      output.find("github version v") == std::string::npos ||
+      output.find("lua_compat_ver 6") == std::string::npos) {
     *code = "linux_backend_version_mismatch";
-    *error = "Bundled nfqws2 не соответствует pinned v0.9.5.2/7a69d56.";
+    *error = "nfqws2 не поддерживает ожидаемый Lua API 6.";
     return false;
   }
   std::vector<std::string> dry_run{g_nfqws_path, "--dry-run"};
@@ -824,8 +804,7 @@ bool RunPreflight(std::string* code, std::string* error) {
                  compiled.arguments.end());
   output.clear();
   errors.clear();
-  if (!RunProcess(dry_run, nullptr, &output, &errors, &termination,
-                  &status)) {
+  if (!RunProcess(dry_run, nullptr, &output, &errors, &termination, &status)) {
     const auto failure = qnzapret::MapSubprocessFailure(
         termination, status, errors.empty() ? output : errors,
         "linux_profile_dry_run");
@@ -836,8 +815,7 @@ bool RunPreflight(std::string* code, std::string* error) {
   return true;
 }
 
-void HandleStart(const std::string& wire_profile,
-                 std::int64_t sender_uid,
+void HandleStart(const std::string& wire_profile, std::int64_t sender_uid,
                  GDBusMethodInvocation* invocation) {
   if (g_state.snapshot.service_active) {
     if (g_state.snapshot.owner_uid == sender_uid) {
@@ -851,20 +829,35 @@ void HandleStart(const std::string& wire_profile,
 
   std::string code;
   std::string error;
-  if (!RunPreflight(&code, &error)) {
+  bool ready = RunPreflight(&code, &error);
+  if (!ready && g_asset_root != "/usr/lib/qnzapret/runtime" &&
+      (code == "linux_backend_unavailable" ||
+       code == "linux_backend_version_mismatch" ||
+       code.rfind("linux_profile_", 0) == 0)) {
+    g_rejected_runtime_root = g_asset_root;
+    g_asset_root = "/usr/lib/qnzapret/runtime";
+    g_nfqws_path = g_asset_root + "/bin/nfqws2";
+    EmitLog("warning", "linux_component_fallback",
+            "Загруженный runtime не прошел preflight; используем встроенный.");
+    ready = RunPreflight(&code, &error);
+  }
+  if (!ready) {
+    SetFailed(code, error);
     ReturnError(invocation, code.c_str(), error);
     return;
   }
   if (!AcquireLock(&error)) {
+    SetFailed("linux_queue_conflict", error);
     ReturnError(invocation, "linux_queue_conflict", error);
     return;
   }
 
   qnzapret::CompiledProfile profile;
-  if (!qnzapret::CompileStrategyProfile(
-          wire_profile, g_asset_root, qnzapret::kQueueNumber, &profile,
-          &error)) {
+  if (!qnzapret::CompileStrategyProfile(wire_profile, g_asset_root,
+                                        qnzapret::kQueueNumber, &profile,
+                                        &error)) {
     ReleaseLock();
+    SetFailed("linux_profile_parse_rejected", error);
     ReturnError(invocation, "linux_profile_parse_rejected", error);
     return;
   }
@@ -883,8 +876,7 @@ void HandleStart(const std::string& wire_profile,
   std::string errors;
   qnzapret::SubprocessTermination termination;
   int status = 0;
-  if (!RunProcess(dry_run, nullptr, &output, &errors, &termination,
-                  &status)) {
+  if (!RunProcess(dry_run, nullptr, &output, &errors, &termination, &status)) {
     const auto failure = qnzapret::MapSubprocessFailure(
         termination, status, errors.empty() ? output : errors,
         "linux_profile_dry_run");
@@ -909,14 +901,154 @@ void HandleStart(const std::string& wire_profile,
   g_state.queue_poll_id = g_timeout_add(50, PollQueueReadiness, nullptr);
 }
 
-void HandleMethodCall(GDBusConnection*,
-                      const gchar*,
-                      const gchar*,
-                      const gchar*,
-                      const gchar* method,
-                      GVariant* parameters,
-                      GDBusMethodInvocation* invocation,
-                      gpointer) {
+struct UpdateContext {
+  GDBusMethodInvocation* invocation;
+  std::string profile;
+  std::int64_t uid;
+  GSubprocess* process = nullptr;
+  guint timeout = 0;
+  bool cancelled = false;
+};
+UpdateContext* g_update = nullptr;
+
+void SelectComponents() {
+  g_asset_root =
+      qnzapret::ComponentPath("runtime", "/usr/lib/qnzapret/runtime");
+  if (g_asset_root == g_rejected_runtime_root)
+    g_asset_root = "/usr/lib/qnzapret/runtime";
+  g_nfqws_path = g_asset_root + "/bin/nfqws2";
+}
+
+gboolean CancelUpdateAfterDeadline(gpointer data) {
+  auto* context = static_cast<UpdateContext*>(data);
+  context->timeout = 0;
+  g_subprocess_force_exit(context->process);
+  return G_SOURCE_REMOVE;
+}
+
+void OnComponentsChecked(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* context = static_cast<UpdateContext*>(data);
+  g_autoptr(GError) error = nullptr;
+  gchar* output = nullptr;
+  gchar* errors = nullptr;
+  g_subprocess_communicate_utf8_finish(G_SUBPROCESS(source), result, &output,
+                                       &errors, &error);
+  if (context->timeout) g_source_remove(context->timeout);
+  if (output != nullptr && *output != '\0')
+    EmitLog("info", "linux_components_checked", output);
+  g_free(output);
+  g_free(errors);
+  g_update = nullptr;
+  if (!context->cancelled) {
+    SelectComponents();
+    std::string validation_error;
+    if (!VerifyAssets(&validation_error)) {
+      EmitLog("warning", "linux_component_fallback",
+              "Используем встроенный runtime: " + validation_error);
+      g_asset_root = "/usr/lib/qnzapret/runtime";
+      g_nfqws_path = g_asset_root + "/bin/nfqws2";
+    }
+    HandleStart(context->profile, context->uid, context->invocation);
+  }
+  g_object_unref(context->invocation);
+  g_object_unref(context->process);
+  delete context;
+}
+
+void StartWithUpdates(const std::string& profile, std::int64_t uid,
+                      GDBusMethodInvocation* invocation) {
+  if (g_update != nullptr || g_state.pending_start_invocation != nullptr ||
+      g_state.stopping) {
+    ReturnError(invocation, "linux_start_in_progress",
+                "Другая операция runtime уже выполняется.");
+    return;
+  }
+  if (g_state.snapshot.service_active) {
+    HandleStart(profile, uid, invocation);
+    return;
+  }
+  g_autoptr(GError) error = nullptr;
+  GSubprocess* process = g_subprocess_new(
+      static_cast<GSubprocessFlags>(G_SUBPROCESS_FLAGS_STDOUT_PIPE |
+                                    G_SUBPROCESS_FLAGS_STDERR_PIPE),
+      &error, "/usr/bin/python3", "-I",
+      "/usr/libexec/qnzapret-component-updater.py", nullptr);
+  if (process == nullptr) {
+    EmitLog("warning", "linux_component_update_skipped",
+            "Проверка обновлений недоступна; используем локальные компоненты.");
+    HandleStart(profile, uid, invocation);
+    return;
+  }
+  auto* context =
+      new UpdateContext{G_DBUS_METHOD_INVOCATION(g_object_ref(invocation)),
+                        profile,
+                        uid,
+                        process,
+                        0,
+                        false};
+  g_update = context;
+  g_state.snapshot.state = "starting";
+  g_state.snapshot.message = "Проверяем обновления компонентов.";
+  g_state.snapshot.owner_uid = uid;
+  EmitSnapshot();
+  EmitLog("info", "linux_component_update_started",
+          "Проверяем обновления zapret2 и Telegram proxy.");
+  context->timeout =
+      g_timeout_add_seconds(45, CancelUpdateAfterDeadline, context);
+  g_subprocess_communicate_utf8_async(process, nullptr, nullptr,
+                                      OnComponentsChecked, context);
+}
+
+struct AuthorizationContext {
+  GDBusMethodInvocation* invocation;
+  std::string method;
+  std::string profile;
+  std::string error;
+  std::int64_t uid = -1;
+};
+
+void OnAuthorized(GObject*, GAsyncResult* result, gpointer data) {
+  auto* context = static_cast<AuthorizationContext*>(data);
+  const bool authorized = g_task_propagate_boolean(G_TASK(result), nullptr);
+  if (!authorized)
+    ReturnError(context->invocation, "linux_authorization_denied",
+                context->error);
+  else if (context->method == "Start")
+    StartWithUpdates(context->profile, context->uid, context->invocation);
+  else if ((g_state.snapshot.service_active || g_update != nullptr) &&
+           g_state.snapshot.owner_uid != context->uid) {
+    ReturnError(context->invocation, "linux_runtime_owned_by_other_user",
+                "Runtime принадлежит другой пользовательской сессии.");
+  } else {
+    if (g_update != nullptr) {
+      g_update->cancelled = true;
+      g_subprocess_force_exit(g_update->process);
+      ReturnError(g_update->invocation, "linux_start_cancelled",
+                  "Запуск отменен командой Stop.");
+    }
+    g_state.snapshot.state = "stopping";
+    g_state.snapshot.message = "Останавливаем системный перехват.";
+    EmitSnapshot();
+    if (g_state.pending_start_invocation != nullptr) {
+      ReturnError(g_state.pending_start_invocation, "linux_start_cancelled",
+                  "Запуск отменен командой Stop.");
+      ClearPendingStart();
+    }
+    RequestProcessStop(true, context->invocation);
+  }
+  g_object_unref(context->invocation);
+  delete context;
+}
+
+void AuthorizationWorker(GTask* task, gpointer, gpointer data, GCancellable*) {
+  auto* context = static_cast<AuthorizationContext*>(data);
+  g_task_return_boolean(
+      task, Authorize(context->invocation, &context->uid, &context->error));
+}
+
+void HandleMethodCall(GDBusConnection*, const gchar*, const gchar*,
+                      const gchar*, const gchar* method, GVariant* parameters,
+                      GDBusMethodInvocation* invocation, gpointer) {
   const std::string method_name = method;
   if (method_name == "GetVersion") {
     g_dbus_method_invocation_return_value(
@@ -938,15 +1070,14 @@ void HandleMethodCall(GDBusConnection*,
                           g_variant_new_boolean(ready));
     g_variant_builder_add(
         &builder, "{sv}", "message",
-        g_variant_new_string(
-            ready ? "Linux runtime прошел read-only preflight." : error.c_str()));
+        g_variant_new_string(ready ? "Linux runtime прошел read-only preflight."
+                                   : error.c_str()));
     if (!ready) {
       g_variant_builder_add(&builder, "{sv}", "code",
                             g_variant_new_string(code.c_str()));
     }
     g_dbus_method_invocation_return_value(
-        invocation,
-        g_variant_new("(@a{sv})", g_variant_builder_end(&builder)));
+        invocation, g_variant_new("(@a{sv})", g_variant_builder_end(&builder)));
     return;
   }
 
@@ -954,34 +1085,15 @@ void HandleMethodCall(GDBusConnection*,
     ReturnError(invocation, "linux_backend_unavailable", "Неизвестный метод.");
     return;
   }
-  std::int64_t sender_uid = -1;
-  std::string authorization_error;
-  if (!Authorize(invocation, &sender_uid, &authorization_error)) {
-    ReturnError(invocation, "linux_authorization_denied",
-                authorization_error);
-    return;
-  }
-  if (method_name == "Start") {
-    const gchar* profile = nullptr;
-    g_variant_get(parameters, "(&s)", &profile);
-    HandleStart(profile == nullptr ? "" : profile, sender_uid, invocation);
-    return;
-  }
-
-  if (!g_state.snapshot.service_active &&
-      g_state.snapshot.state != "failed") {
-    g_dbus_method_invocation_return_value(invocation, nullptr);
-    return;
-  }
-  g_state.snapshot.state = "stopping";
-  g_state.snapshot.message = "Останавливаем системный перехват.";
-  EmitSnapshot();
-  if (g_state.pending_start_invocation != nullptr) {
-    ReturnError(g_state.pending_start_invocation, "linux_start_cancelled",
-                "Запуск отменен командой Stop.");
-    ClearPendingStart();
-  }
-  RequestProcessStop(true, invocation);
+  const gchar* profile = "";
+  if (method_name == "Start") g_variant_get(parameters, "(&s)", &profile);
+  auto* context = new AuthorizationContext{
+      G_DBUS_METHOD_INVOCATION(g_object_ref(invocation)), method_name,
+      profile == nullptr ? "" : profile, "", -1};
+  GTask* task = g_task_new(nullptr, nullptr, OnAuthorized, context);
+  g_task_set_task_data(task, context, nullptr);
+  g_task_run_in_thread(task, AuthorizationWorker);
+  g_object_unref(task);
 }
 
 const GDBusInterfaceVTable kInterfaceVtable = {
@@ -1000,9 +1112,8 @@ void OnBusAcquired(GDBusConnection* connection, const gchar*, gpointer) {
     g_error("Invalid D-Bus introspection: %s", error->message);
   }
   g_state.registration_id = g_dbus_connection_register_object(
-      connection, qnzapret::kRuntimeObjectPath,
-      introspection->interfaces[0], &kInterfaceVtable, nullptr, nullptr,
-      &error);
+      connection, qnzapret::kRuntimeObjectPath, introspection->interfaces[0],
+      &kInterfaceVtable, nullptr, nullptr, &error);
   if (g_state.registration_id == 0) {
     g_error("Unable to register runtime object: %s", error->message);
   }
@@ -1032,8 +1143,8 @@ gboolean PollIntegrationQueue(gpointer) {
   std::string errors;
   qnzapret::SubprocessTermination termination;
   int status = 0;
-  if (!RunProcess({nft, "-f", "-"}, &rules, &output, &errors,
-                  &termination, &status)) {
+  if (!RunProcess({nft, "-f", "-"}, &rules, &output, &errors, &termination,
+                  &status)) {
     g_printerr("integration nft transaction failed: %s\n",
                (errors.empty() ? output : errors).c_str());
     g_integration_failed = true;
@@ -1075,9 +1186,9 @@ int RunIntegrationTest() {
     return 1;
   }
   qnzapret::CompiledProfile profile;
-  if (!qnzapret::CompileStrategyProfile(
-          qnzapret::DefaultStrategyProfileWire(), g_asset_root,
-          qnzapret::kQueueNumber, &profile, &error)) {
+  if (!qnzapret::CompileStrategyProfile(qnzapret::DefaultStrategyProfileWire(),
+                                        g_asset_root, qnzapret::kQueueNumber,
+                                        &profile, &error)) {
     g_printerr("integration profile failed: %s\n", error.c_str());
     ReleaseLock();
     return 1;
@@ -1094,13 +1205,43 @@ int RunIntegrationTest() {
   g_main_loop_run(loop);
   const bool table_removed = !TableExists();
   CleanupProcessForShutdown();
-  return g_integration_ready && !g_integration_failed && table_removed ? 0
-                                                                       : 1;
+  return g_integration_ready && !g_integration_failed && table_removed ? 0 : 1;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc == 3 && std::string(argv[1]) == "--validate-component") {
+    if (geteuid() == 0) {
+      g_printerr("component validation requires an unprivileged UID\n");
+      return 77;
+    }
+    g_asset_root = argv[2];
+    g_nfqws_path = g_asset_root + "/bin/nfqws2";
+    std::string error;
+    qnzapret::CompiledProfile compiled;
+    if (!VerifyAssets(&error) ||
+        !qnzapret::CompileStrategyProfile(
+            qnzapret::DefaultStrategyProfileWire(), g_asset_root,
+            qnzapret::kQueueNumber, &compiled, &error))
+      return 1;
+    std::string output, errors;
+    qnzapret::SubprocessTermination termination;
+    int status = 0;
+    if (!RunProcess({g_nfqws_path, "--version"}, nullptr, &output, &errors,
+                    &termination, &status) ||
+        output.find("lua_compat_ver 6") == std::string::npos)
+      return 1;
+    std::vector<std::string> command{g_nfqws_path, "--dry-run"};
+    // UID уже понижен обновлятором; nfqws не должен повторно вызывать
+    // setgroups.
+    for (const auto& argument : compiled.arguments) {
+      if (argument.rfind("--user=", 0) != 0) command.push_back(argument);
+    }
+    return RunProcess(command, nullptr, &output, &errors, &termination, &status)
+               ? 0
+               : 1;
+  }
   if (argc == 2 && std::string(argv[1]) == "--integration-test") {
     return RunIntegrationTest();
   }
@@ -1115,18 +1256,18 @@ int main(int argc, char** argv) {
     }
     return 0;
   }
+  SelectComponents();
   g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, false);
   g_loop = loop;
-  g_state.owner_id = g_bus_own_name(
-      G_BUS_TYPE_SYSTEM, qnzapret::kRuntimeBusName,
-      G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT, OnBusAcquired, nullptr,
-      OnNameLost, nullptr, nullptr);
+  g_state.owner_id =
+      g_bus_own_name(G_BUS_TYPE_SYSTEM, qnzapret::kRuntimeBusName,
+                     G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT, OnBusAcquired,
+                     nullptr, OnNameLost, nullptr, nullptr);
 
   while (g_state.connection == nullptr) {
     g_main_context_iteration(nullptr, true);
   }
-  EmitLog("info", "linux_backend_ready",
-          "Системный Linux runtime доступен.");
+  EmitLog("info", "linux_backend_ready", "Системный Linux runtime доступен.");
   g_main_loop_run(loop);
 
   CleanupProcessForShutdown();

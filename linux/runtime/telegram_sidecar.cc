@@ -1,6 +1,3 @@
-#include "runtime_contract.h"
-#include "telegram_state_directory.h"
-
 #include <arpa/inet.h>
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -16,6 +13,10 @@
 #include <fstream>
 #include <string>
 #include <vector>
+
+#include "component_paths.h"
+#include "runtime_contract.h"
+#include "telegram_state_directory.h"
 
 namespace {
 
@@ -64,14 +65,14 @@ struct SidecarState {
   bool bridge_ready = false;
   bool stopping = false;
   int start_attempts = 0;
+  std::string component_root;
+  std::string rejected_component;
 };
 
 SidecarState g_state;
 GMainLoop* g_loop = nullptr;
 
-std::int64_t NowMillis() {
-  return g_get_real_time() / 1000;
-}
+std::int64_t NowMillis() { return g_get_real_time() / 1000; }
 
 GVariant* SnapshotVariant() {
   GVariantBuilder builder;
@@ -82,9 +83,9 @@ GVariant* SnapshotVariant() {
                         g_variant_new_boolean(g_state.bridge_ready));
   g_variant_builder_add(&builder, "{sv}", "listenerReady",
                         g_variant_new_boolean(g_state.listener_ready));
-  g_variant_builder_add(&builder, "{sv}", "setupRequired",
-                        g_variant_new_boolean(g_state.listener_ready &&
-                                              !g_state.bridge_ready));
+  g_variant_builder_add(
+      &builder, "{sv}", "setupRequired",
+      g_variant_new_boolean(g_state.listener_ready && !g_state.bridge_ready));
   g_variant_builder_add(&builder, "{sv}", "endpoint",
                         g_variant_new_string("127.0.0.1:1443"));
   g_variant_builder_add(&builder, "{sv}", "message",
@@ -101,9 +102,7 @@ void EmitSnapshot() {
   }
 }
 
-void EmitLog(const char* level,
-             const char* code,
-             const std::string& message) {
+void EmitLog(const char* level, const char* code, const std::string& message) {
   if (g_state.connection == nullptr) {
     return;
   }
@@ -111,12 +110,10 @@ void EmitLog(const char* level,
   g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
   g_variant_builder_add(&builder, "{sv}", "timestampMillis",
                         g_variant_new_int64(NowMillis()));
-  g_variant_builder_add(&builder, "{sv}", "level",
-                        g_variant_new_string(level));
+  g_variant_builder_add(&builder, "{sv}", "level", g_variant_new_string(level));
   g_variant_builder_add(&builder, "{sv}", "source",
                         g_variant_new_string("telegram-sidecar"));
-  g_variant_builder_add(&builder, "{sv}", "code",
-                        g_variant_new_string(code));
+  g_variant_builder_add(&builder, "{sv}", "code", g_variant_new_string(code));
   const auto redacted = qnzapret::RedactRuntimeMessage(message);
   g_variant_builder_add(&builder, "{sv}", "message",
                         g_variant_new_string(redacted.c_str()));
@@ -139,7 +136,9 @@ bool ReadSecret(std::string* secret) {
          (secret->back() == '\n' || secret->back() == '\r')) {
     secret->pop_back();
   }
-  return secret->size() == 32;
+  return secret->size() == 32 &&
+         secret->find_first_not_of("0123456789abcdefABCDEF") ==
+             std::string::npos;
 }
 
 bool EnsureSecret(std::string* error) {
@@ -186,8 +185,7 @@ bool ProbeListener() {
   sockaddr_in address{};
   address.sin_family = AF_INET;
   address.sin_port = htons(1443);
-  const bool parsed =
-      inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1;
+  const bool parsed = inet_pton(AF_INET, "127.0.0.1", &address.sin_addr) == 1;
   const bool connected =
       parsed && connect(socket_fd, reinterpret_cast<sockaddr*>(&address),
                         sizeof(address)) == 0;
@@ -195,8 +193,7 @@ bool ProbeListener() {
   return connected;
 }
 
-void ReturnError(GDBusMethodInvocation* invocation,
-                 const char* code,
+void ReturnError(GDBusMethodInvocation* invocation, const char* code,
                  const std::string& message);
 bool StartProcess(std::string* error_text);
 gboolean PollStartReadiness(gpointer);
@@ -213,22 +210,21 @@ gboolean CheckHealth(gpointer) {
   const bool previous_listener = g_state.listener_ready;
   const bool previous_bridge = g_state.bridge_ready;
   g_state.listener_ready = ProbeListener();
+  g_state.bridge_ready = false;
   gchar* contents = nullptr;
   gsize length = 0;
   if (g_file_get_contents(g_state.health_path.c_str(), &contents, &length,
                           nullptr)) {
     const std::string health(contents, length);
-    g_state.bridge_ready =
-        health.find("bridge_ready") != std::string::npos;
+    g_state.bridge_ready = health.find("bridge_ready") != std::string::npos;
     g_free(contents);
   }
   g_state.state = g_state.listener_ready ? "running" : "starting";
-  g_state.message = g_state.bridge_ready
-                        ? "Telegram proxy подтвердил живой upstream bridge."
-                        : g_state.listener_ready
-                              ? "Telegram proxy слушает loopback; требуется "
-                                "подтверждение в Telegram."
-                              : "Запускаем Telegram compatibility mode.";
+  g_state.message =
+      g_state.bridge_ready ? "Telegram proxy подтвердил живой upstream bridge."
+      : g_state.listener_ready ? "Telegram proxy слушает loopback; требуется "
+                                 "подтверждение в Telegram."
+                               : "Запускаем Telegram compatibility mode.";
   if (previous_listener != g_state.listener_ready ||
       previous_bridge != g_state.bridge_ready) {
     EmitSnapshot();
@@ -257,6 +253,18 @@ void ProcessExited(GObject* source, GAsyncResult* result, gpointer) {
   g_clear_object(&g_state.process);
   g_state.listener_ready = false;
   g_state.bridge_ready = false;
+  if (!g_state.stopping && g_state.pending_start != nullptr &&
+      g_state.component_root != "/usr/lib/qnzapret/telegram") {
+    g_state.rejected_component = g_state.component_root;
+    EmitLog("warning", "linux_telegram_component_fallback",
+            "Обновленный Telegram core не запустился; используем встроенный.");
+    std::string fallback_error;
+    if (StartProcess(&fallback_error)) {
+      g_state.start_attempts = 0;
+      g_state.start_timer = g_timeout_add(100, PollStartReadiness, nullptr);
+      return;
+    }
+  }
   if (g_state.pending_start != nullptr) {
     ReturnError(g_state.pending_start, "linux_telegram_start_failed",
                 "Telegram sidecar завершился до готовности listener.");
@@ -266,8 +274,7 @@ void ProcessExited(GObject* source, GAsyncResult* result, gpointer) {
     g_state.state = "idle";
     g_state.message = "Telegram compatibility mode остановлен.";
     g_unlink(g_state.health_path.c_str());
-    EmitLog("info", "linux_telegram_stopped",
-            "Telegram sidecar остановлен.");
+    EmitLog("info", "linux_telegram_stopped", "Telegram sidecar остановлен.");
     if (g_state.pending_stop != nullptr) {
       g_dbus_method_invocation_return_value(g_state.pending_stop, nullptr);
       ClearInvocation(&g_state.pending_stop);
@@ -305,7 +312,7 @@ bool StartProcess(std::string* error_text) {
   const std::vector<std::string> command = {
       "/usr/bin/python3",
       "-m",
-      "proxy.tg_ws_proxy",
+      "qnzapret_telegram",
       "--host=127.0.0.1",
       "--port=1443",
       "--secret-file=" + g_state.secret_path,
@@ -322,8 +329,15 @@ bool StartProcess(std::string* error_text) {
 
   g_autoptr(GSubprocessLauncher) launcher =
       g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE);
-  g_subprocess_launcher_setenv(launcher, "PYTHONPATH",
-                               "/usr/lib/qnzapret/telegram", true);
+  g_state.component_root =
+      qnzapret::ComponentPath("telegram", "/usr/lib/qnzapret/telegram");
+  if (g_state.component_root == g_state.rejected_component)
+    g_state.component_root = "/usr/lib/qnzapret/telegram";
+  const auto python_path = std::string("/usr/lib/qnzapret/telegram/adapter:") +
+                           g_state.component_root;
+  g_subprocess_launcher_setenv(launcher, "PYTHONPATH", python_path.c_str(),
+                               true);
+  g_subprocess_launcher_setenv(launcher, "PYTHONDONTWRITEBYTECODE", "1", true);
   g_subprocess_launcher_setenv(launcher, "PYTHONUNBUFFERED", "1", true);
   g_subprocess_launcher_set_cwd(launcher, g_state.state_directory.c_str());
   g_autoptr(GError) error = nullptr;
@@ -400,8 +414,7 @@ void BeginStop(GDBusMethodInvocation* invocation) {
   g_state.state = "stopping";
   g_state.message = "Останавливаем Telegram compatibility mode.";
   if (invocation != nullptr && g_state.pending_stop == nullptr) {
-    g_state.pending_stop =
-        G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
+    g_state.pending_stop = G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
   }
   g_subprocess_send_signal(g_state.process, SIGTERM);
   if (g_state.stop_timer == 0) {
@@ -410,22 +423,16 @@ void BeginStop(GDBusMethodInvocation* invocation) {
   EmitSnapshot();
 }
 
-void ReturnError(GDBusMethodInvocation* invocation,
-                 const char* code,
+void ReturnError(GDBusMethodInvocation* invocation, const char* code,
                  const std::string& message) {
   const std::string name = std::string("dev.qnzapret.Error.") + code;
   g_dbus_method_invocation_return_dbus_error(invocation, name.c_str(),
                                              message.c_str());
 }
 
-void HandleMethodCall(GDBusConnection*,
-                      const gchar*,
-                      const gchar*,
-                      const gchar*,
-                      const gchar* method,
-                      GVariant*,
-                      GDBusMethodInvocation* invocation,
-                      gpointer) {
+void HandleMethodCall(GDBusConnection*, const gchar*, const gchar*,
+                      const gchar*, const gchar* method, GVariant*,
+                      GDBusMethodInvocation* invocation, gpointer) {
   const std::string method_name = method;
   if (method_name == "Prepare") {
     std::string error;
@@ -439,11 +446,10 @@ void HandleMethodCall(GDBusConnection*,
                           g_variant_new_boolean(granted));
     g_variant_builder_add(
         &builder, "{sv}", "message",
-        g_variant_new_string(
-            granted ? "Telegram sidecar установлен и готов." : error.c_str()));
+        g_variant_new_string(granted ? "Telegram sidecar установлен и готов."
+                                     : error.c_str()));
     g_dbus_method_invocation_return_value(
-        invocation,
-        g_variant_new("(@a{sv})", g_variant_builder_end(&builder)));
+        invocation, g_variant_new("(@a{sv})", g_variant_builder_end(&builder)));
     return;
   }
   if (method_name == "GetSnapshot") {
@@ -458,8 +464,7 @@ void HandleMethodCall(GDBusConnection*,
                   "Не удалось прочитать Telegram secret.");
       return;
     }
-    const auto uri = "tg://proxy?server=127.0.0.1&port=1443&secret=dd" +
-                     secret;
+    const auto uri = "tg://proxy?server=127.0.0.1&port=1443&secret=dd" + secret;
     g_dbus_method_invocation_return_value(invocation,
                                           g_variant_new("(s)", uri.c_str()));
     return;
@@ -479,8 +484,7 @@ void HandleMethodCall(GDBusConnection*,
       ReturnError(invocation, "linux_telegram_start_failed", error);
       return;
     }
-    g_state.pending_start =
-        G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
+    g_state.pending_start = G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
     g_state.start_attempts = 0;
     g_state.start_timer = g_timeout_add(100, PollStartReadiness, nullptr);
     return;
@@ -507,8 +511,7 @@ void HandleMethodCall(GDBusConnection*,
       g_state.start_timer = g_timeout_add(100, PollStartReadiness, nullptr);
       return;
     }
-    g_state.pending_retry =
-        G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
+    g_state.pending_retry = G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
     BeginStop(nullptr);
     return;
   }
@@ -531,9 +534,8 @@ void OnBusAcquired(GDBusConnection* connection, const gchar*, gpointer) {
     g_error("Invalid sidecar introspection: %s", error->message);
   }
   g_state.registration_id = g_dbus_connection_register_object(
-      connection, qnzapret::kTelegramObjectPath,
-      introspection->interfaces[0], &kInterfaceVtable, nullptr, nullptr,
-      &error);
+      connection, qnzapret::kTelegramObjectPath, introspection->interfaces[0],
+      &kInterfaceVtable, nullptr, nullptr, &error);
   if (g_state.registration_id == 0) {
     g_error("Unable to register sidecar object: %s", error->message);
   }
@@ -553,10 +555,10 @@ int main() {
   g_state.health_path = g_state.state_directory + "/telegram.health";
   g_autoptr(GMainLoop) loop = g_main_loop_new(nullptr, false);
   g_loop = loop;
-  g_state.owner_id = g_bus_own_name(
-      G_BUS_TYPE_SESSION, qnzapret::kTelegramBusName,
-      G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT, OnBusAcquired, nullptr,
-      OnNameLost, nullptr, nullptr);
+  g_state.owner_id =
+      g_bus_own_name(G_BUS_TYPE_SESSION, qnzapret::kTelegramBusName,
+                     G_BUS_NAME_OWNER_FLAGS_ALLOW_REPLACEMENT, OnBusAcquired,
+                     nullptr, OnNameLost, nullptr, nullptr);
   g_state.health_timer = g_timeout_add_seconds(1, CheckHealth, nullptr);
   g_main_loop_run(loop);
 

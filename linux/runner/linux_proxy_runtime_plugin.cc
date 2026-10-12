@@ -2,7 +2,6 @@
 
 #include <gio/gio.h>
 
-#include <algorithm>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -12,15 +11,18 @@
 struct LinuxProxyRuntimePlugin {
   FlMethodChannel* method_channel = nullptr;
   FlEventChannel* event_channel = nullptr;
-  GDBusProxy* runtime_proxy = nullptr;
-  GDBusProxy* telegram_proxy = nullptr;
+  GDBusConnection* runtime_connection = nullptr;
+  GDBusConnection* telegram_connection = nullptr;
+  GVariant* runtime_snapshot = nullptr;
+  GVariant* telegram_snapshot = nullptr;
+  GCancellable* cancellable = g_cancellable_new();
   guint runtime_signal_id = 0;
   guint telegram_signal_id = 0;
+  int refs = 1;
   bool listening = false;
+  bool disposed = false;
 };
-
 namespace {
-
 FlValue* VariantToValue(GVariant* variant) {
   if (variant == nullptr) {
     return fl_value_new_null();
@@ -89,52 +91,7 @@ std::string ErrorCode(GError* error, const char* fallback) {
   return separator == std::string::npos ? name : name.substr(separator + 1);
 }
 
-void RespondError(FlMethodCall* call,
-                  GError* error,
-                  const char* fallback_code) {
-  const auto code = ErrorCode(error, fallback_code);
-  const auto message =
-      error == nullptr ? "Linux runtime command failed." : error->message;
-  fl_method_call_respond_error(call, code.c_str(), message, nullptr, nullptr);
-}
-
-GDBusProxy* EnsureProxy(LinuxProxyRuntimePlugin* plugin,
-                        bool telegram,
-                        GError** error) {
-  GDBusProxy** slot =
-      telegram ? &plugin->telegram_proxy : &plugin->runtime_proxy;
-  if (*slot != nullptr) {
-    return *slot;
-  }
-  *slot = g_dbus_proxy_new_for_bus_sync(
-      telegram ? G_BUS_TYPE_SESSION : G_BUS_TYPE_SYSTEM,
-      G_DBUS_PROXY_FLAGS_NONE, nullptr,
-      telegram ? qnzapret::kTelegramBusName : qnzapret::kRuntimeBusName,
-      telegram ? qnzapret::kTelegramObjectPath
-               : qnzapret::kRuntimeObjectPath,
-      telegram ? qnzapret::kTelegramInterface
-               : qnzapret::kRuntimeInterface,
-      nullptr, error);
-  return *slot;
-}
-
-GVariant* CallProxy(LinuxProxyRuntimePlugin* plugin,
-                    bool telegram,
-                    const char* method,
-                    GVariant* arguments,
-                    int timeout,
-                    GError** error) {
-  GDBusProxy* proxy = EnsureProxy(plugin, telegram, error);
-  if (proxy == nullptr) {
-    return nullptr;
-  }
-  return g_dbus_proxy_call_sync(proxy, method, arguments,
-                                G_DBUS_CALL_FLAGS_NONE, timeout, nullptr,
-                                error);
-}
-
-std::string StringValue(FlValue* map,
-                        const char* key,
+std::string StringValue(FlValue* map, const char* key,
                         const std::string& fallback = "") {
   if (map == nullptr || fl_value_get_type(map) != FL_VALUE_TYPE_MAP) {
     return fallback;
@@ -192,8 +149,7 @@ std::string JoinStringList(FlValue* list) {
   return output.str();
 }
 
-bool SerializeProfile(FlValue* arguments,
-                      std::string* wire,
+bool SerializeProfile(FlValue* arguments, std::string* wire,
                       std::string* error) {
   if (arguments == nullptr ||
       fl_value_get_type(arguments) != FL_VALUE_TYPE_MAP) {
@@ -220,8 +176,8 @@ bool SerializeProfile(FlValue* arguments,
   }
 
   std::ostringstream output;
-  output << "profileId="
-         << StringValue(profile, "id", "default-lightweight") << '\n';
+  output << "profileId=" << StringValue(profile, "id", "default-lightweight")
+         << '\n';
   output << "profileName="
          << StringValue(profile, "name", "Default lightweight") << '\n';
   output << "unmatched="
@@ -292,87 +248,76 @@ bool SerializeProfile(FlValue* arguments,
   return true;
 }
 
-GVariant* ExtractDictionary(GVariant* result) {
-  if (result == nullptr || g_variant_n_children(result) == 0) {
-    return nullptr;
-  }
-  return g_variant_get_child_value(result, 0);
+struct Request {
+  LinuxProxyRuntimePlugin* plugin;
+  FlMethodCall* call;
+  std::string method;
+  std::string profile;
+  std::string error_code;
+  std::string error_message;
+  bool telegram_required = true;
+  GAppInfo* telegram_app = nullptr;
+  std::string setup_uri;
+};
+
+void UnrefPlugin(LinuxProxyRuntimePlugin* plugin) {
+  if (--plugin->refs != 0) return;
+  g_clear_pointer(&plugin->runtime_snapshot, g_variant_unref);
+  g_clear_pointer(&plugin->telegram_snapshot, g_variant_unref);
+  g_clear_object(&plugin->cancellable);
+  g_clear_object(&plugin->method_channel);
+  g_clear_object(&plugin->event_channel);
+  delete plugin;
 }
 
-FlValue* MergedSnapshot(LinuxProxyRuntimePlugin* plugin, GError** error) {
-  g_autoptr(GVariant) runtime_result =
-      CallProxy(plugin, false, "GetSnapshot", nullptr, 5000, error);
-  if (runtime_result == nullptr) {
-    return nullptr;
-  }
-  g_autoptr(GVariant) runtime_snapshot =
-      ExtractDictionary(runtime_result);
-  FlValue* output = VariantToValue(runtime_snapshot);
+void CacheSnapshot(LinuxProxyRuntimePlugin* plugin, bool telegram,
+                   GVariant* result) {
+  auto** slot =
+      telegram ? &plugin->telegram_snapshot : &plugin->runtime_snapshot;
+  g_clear_pointer(slot, g_variant_unref);
+  if (result != nullptr) *slot = g_variant_get_child_value(result, 0);
+}
 
-  g_autoptr(GError) telegram_error = nullptr;
-  g_autoptr(GVariant) telegram_result =
-      CallProxy(plugin, true, "GetSnapshot", nullptr, 5000,
-                &telegram_error);
-  if (telegram_result == nullptr) {
-    fl_value_set_string_take(
-        output, "telegramCompatibilityProxyReady", fl_value_new_bool(false));
-    fl_value_set_string_take(
-        output, "telegramCompatibilitySetupRequired",
-        fl_value_new_bool(false));
-    fl_value_set_string_take(
-        output, "telegramCompatibilityProxyMessage",
-        fl_value_new_string("Telegram sidecar недоступен."));
-    fl_value_set_string_take(output, "telegramSidecarState",
-                             fl_value_new_string("unavailable"));
-    fl_value_set_string_take(output, "degraded", fl_value_new_bool(true));
-    fl_value_set_string_take(
-        output, "partialFailureCode",
-        fl_value_new_string("linux_telegram_unavailable"));
-    fl_value_set_string_take(
-        output, "partialFailureMessage",
-        fl_value_new_string("Telegram sidecar недоступен."));
-    return output;
-  }
-  g_autoptr(GVariant) telegram_snapshot =
-      ExtractDictionary(telegram_result);
-  gboolean listener_ready = false;
-  gboolean setup_required = false;
-  const gchar* state = "idle";
+FlValue* MergedSnapshot(LinuxProxyRuntimePlugin* plugin) {
+  if (plugin->runtime_snapshot == nullptr) return nullptr;
+  FlValue* output = VariantToValue(plugin->runtime_snapshot);
+  gboolean ready = false, setup = false;
+  const gchar* state = "unavailable";
+  const gchar* message = "Telegram sidecar недоступен.";
   const gchar* endpoint = "";
-  const gchar* message = "";
-  g_variant_lookup(telegram_snapshot, "listenerReady", "b",
-                   &listener_ready);
-  g_variant_lookup(telegram_snapshot, "setupRequired", "b", &setup_required);
-  g_variant_lookup(telegram_snapshot, "state", "&s", &state);
-  g_variant_lookup(telegram_snapshot, "endpoint", "&s", &endpoint);
-  g_variant_lookup(telegram_snapshot, "message", "&s", &message);
+  if (plugin->telegram_snapshot != nullptr) {
+    g_variant_lookup(plugin->telegram_snapshot, "ready", "b", &ready);
+    g_variant_lookup(plugin->telegram_snapshot, "setupRequired", "b", &setup);
+    g_variant_lookup(plugin->telegram_snapshot, "state", "&s", &state);
+    g_variant_lookup(plugin->telegram_snapshot, "message", "&s", &message);
+    g_variant_lookup(plugin->telegram_snapshot, "endpoint", "&s", &endpoint);
+  }
   fl_value_set_string_take(output, "telegramCompatibilityProxyReady",
-                           fl_value_new_bool(listener_ready));
+                           fl_value_new_bool(ready));
   fl_value_set_string_take(output, "telegramCompatibilitySetupRequired",
-                           fl_value_new_bool(setup_required));
+                           fl_value_new_bool(setup));
   fl_value_set_string_take(output, "telegramCompatibilityProxyEndpoint",
                            fl_value_new_string(endpoint));
   fl_value_set_string_take(output, "telegramCompatibilityProxyMessage",
                            fl_value_new_string(message));
   fl_value_set_string_take(output, "telegramSidecarState",
                            fl_value_new_string(state));
-  const bool failed = std::string(state) == "failed";
+  const bool failed =
+      std::string(state) == "failed" || std::string(state) == "unavailable";
   fl_value_set_string_take(output, "degraded", fl_value_new_bool(failed));
   if (failed) {
-    fl_value_set_string_take(
-        output, "partialFailureCode",
-        fl_value_new_string("linux_telegram_sidecar_failed"));
+    fl_value_set_string_take(output, "partialFailureCode",
+                             fl_value_new_string("linux_telegram_unavailable"));
     fl_value_set_string_take(output, "partialFailureMessage",
                              fl_value_new_string(message));
   }
   return output;
 }
 
-void SendEvent(LinuxProxyRuntimePlugin* plugin,
-               const char* type,
-               const char* field,
-               FlValue* payload) {
-  if (!plugin->listening) {
+void SendEvent(LinuxProxyRuntimePlugin* plugin, const char* type,
+               const char* field, FlValue* payload) {
+  if (payload == nullptr) return;
+  if (plugin->disposed || !plugin->listening) {
     fl_value_unref(payload);
     return;
   }
@@ -382,347 +327,436 @@ void SendEvent(LinuxProxyRuntimePlugin* plugin,
   fl_event_channel_send(plugin->event_channel, event, nullptr, nullptr);
 }
 
-void HandleDbusSignal(GDBusConnection*,
-                      const gchar*,
-                      const gchar*,
-                      const gchar*,
-                      const gchar* signal_name,
-                      GVariant* parameters,
-                      gpointer user_data) {
-  auto* plugin = static_cast<LinuxProxyRuntimePlugin*>(user_data);
-  if (std::string(signal_name) == "LogEvent") {
-    g_autoptr(GVariant) log = ExtractDictionary(parameters);
+void HandleDbusSignal(GDBusConnection*, const gchar*, const gchar*,
+                      const gchar* interface, const gchar* name,
+                      GVariant* parameters, gpointer data) {
+  auto* plugin = static_cast<LinuxProxyRuntimePlugin*>(data);
+  if (std::string(name) == "LogEvent") {
+    g_autoptr(GVariant) log = g_variant_get_child_value(parameters, 0);
     SendEvent(plugin, "log", "log", VariantToValue(log));
-    return;
-  }
-  g_autoptr(GError) error = nullptr;
-  FlValue* snapshot = MergedSnapshot(plugin, &error);
-  if (snapshot != nullptr) {
-    SendEvent(plugin, "snapshot", "snapshot", snapshot);
-  }
-}
-
-void SubscribeSignals(LinuxProxyRuntimePlugin* plugin) {
-  g_autoptr(GError) error = nullptr;
-  GDBusProxy* runtime = EnsureProxy(plugin, false, &error);
-  if (runtime != nullptr && plugin->runtime_signal_id == 0) {
-    plugin->runtime_signal_id = g_dbus_connection_signal_subscribe(
-        g_dbus_proxy_get_connection(runtime), qnzapret::kRuntimeBusName,
-        qnzapret::kRuntimeInterface, nullptr, qnzapret::kRuntimeObjectPath,
-        nullptr, G_DBUS_SIGNAL_FLAGS_NONE, HandleDbusSignal, plugin, nullptr);
-  }
-  g_clear_error(&error);
-  GDBusProxy* telegram = EnsureProxy(plugin, true, &error);
-  if (telegram != nullptr && plugin->telegram_signal_id == 0) {
-    plugin->telegram_signal_id = g_dbus_connection_signal_subscribe(
-        g_dbus_proxy_get_connection(telegram), qnzapret::kTelegramBusName,
-        qnzapret::kTelegramInterface, nullptr,
-        qnzapret::kTelegramObjectPath, nullptr, G_DBUS_SIGNAL_FLAGS_NONE,
-        HandleDbusSignal, plugin, nullptr);
+  } else if (std::string(name) == "SnapshotChanged") {
+    CacheSnapshot(plugin,
+                  std::string(interface) == qnzapret::kTelegramInterface,
+                  parameters);
+    SendEvent(plugin, "snapshot", "snapshot", MergedSnapshot(plugin));
   }
 }
 
-FlMethodErrorResponse* ListenHandler(FlEventChannel*,
-                                     FlValue*,
-                                     gpointer user_data) {
-  auto* plugin = static_cast<LinuxProxyRuntimePlugin*>(user_data);
-  plugin->listening = true;
-  SubscribeSignals(plugin);
-  g_autoptr(GError) error = nullptr;
-  FlValue* snapshot = MergedSnapshot(plugin, &error);
-  if (snapshot != nullptr) {
-    SendEvent(plugin, "snapshot", "snapshot", snapshot);
-  }
-  return nullptr;
-}
-
-FlMethodErrorResponse* CancelHandler(FlEventChannel*,
-                                     FlValue*,
-                                     gpointer user_data) {
-  static_cast<LinuxProxyRuntimePlugin*>(user_data)->listening = false;
-  return nullptr;
-}
-
-struct AsyncMethodContext {
-  FlMethodCall* call = nullptr;
-  GDBusProxy* runtime = nullptr;
-  GDBusProxy* telegram = nullptr;
-  std::string profile;
-  std::string error_code;
-  std::string error_message;
+// Все callback выполняются в GTK main context, ожидание D-Bus его не блокирует.
+struct BusCall {
+  LinuxProxyRuntimePlugin* plugin;
+  bool telegram;
+  std::string method;
+  GVariant* arguments;
+  GAsyncReadyCallback callback;
+  gpointer data;
+  int timeout;
 };
 
-AsyncMethodContext* NewAsyncContext(FlMethodCall* call,
-                                    GDBusProxy* runtime,
-                                    GDBusProxy* telegram) {
-  auto* context = new AsyncMethodContext();
-  context->call = FL_METHOD_CALL(g_object_ref(call));
-  context->runtime =
-      runtime == nullptr ? nullptr : G_DBUS_PROXY(g_object_ref(runtime));
-  context->telegram =
-      telegram == nullptr ? nullptr : G_DBUS_PROXY(g_object_ref(telegram));
-  return context;
-}
-
-void DeleteAsyncContext(AsyncMethodContext* context) {
-  g_clear_object(&context->call);
-  g_clear_object(&context->runtime);
-  g_clear_object(&context->telegram);
-  delete context;
-}
-
-void CaptureAsyncError(AsyncMethodContext* context,
-                       GError* error,
-                       const char* fallback_code) {
-  if (!context->error_code.empty()) {
-    return;
-  }
-  context->error_code = ErrorCode(error, fallback_code);
-  context->error_message =
-      error == nullptr ? "Linux runtime command failed." : error->message;
-}
-
-void RespondAsync(AsyncMethodContext* context) {
-  if (context->error_code.empty()) {
-    fl_method_call_respond_success(context->call, nullptr, nullptr);
-  } else {
-    fl_method_call_respond_error(
-        context->call, context->error_code.c_str(),
-        context->error_message.empty() ? "Linux runtime command failed."
-                                       : context->error_message.c_str(),
-        nullptr, nullptr);
-  }
-  DeleteAsyncContext(context);
-}
-
-void OnStartRollback(GObject* source, GAsyncResult* result, gpointer data) {
-  auto* context = static_cast<AsyncMethodContext*>(data);
-  g_autoptr(GError) rollback_error = nullptr;
-  g_autoptr(GVariant) response =
-      g_dbus_proxy_call_finish(G_DBUS_PROXY(source), result, &rollback_error);
-  (void)response;
-  RespondAsync(context);
-}
-
-void OnRuntimeStarted(GObject* source, GAsyncResult* result, gpointer data) {
-  auto* context = static_cast<AsyncMethodContext*>(data);
+void OnBusReady(GObject*, GAsyncResult* result, gpointer data) {
+  auto* call = static_cast<BusCall*>(data);
+  auto* plugin = call->plugin;
   g_autoptr(GError) error = nullptr;
-  g_autoptr(GVariant) response =
-      g_dbus_proxy_call_finish(G_DBUS_PROXY(source), result, &error);
-  if (response == nullptr) {
-    CaptureAsyncError(context, error, "linux_nfqws_start_failed");
-    if (context->telegram != nullptr) {
-      g_dbus_proxy_call(context->telegram, "Stop", nullptr,
-                        G_DBUS_CALL_FLAGS_NONE, 15000, nullptr,
-                        OnStartRollback, context);
-      return;
+  g_autoptr(GDBusConnection) connection = g_bus_get_finish(result, &error);
+  if (connection == nullptr) {
+    GTask* task = g_task_new(nullptr, nullptr, call->callback, call->data);
+    g_task_return_error(task, g_steal_pointer(&error));
+    g_object_unref(task);
+  } else {
+    auto** slot = call->telegram ? &plugin->telegram_connection
+                                 : &plugin->runtime_connection;
+    auto* signal_id = call->telegram ? &plugin->telegram_signal_id
+                                     : &plugin->runtime_signal_id;
+    if (*slot == nullptr && !plugin->disposed) {
+      *slot = G_DBUS_CONNECTION(g_object_ref(connection));
+      *signal_id = g_dbus_connection_signal_subscribe(
+          connection,
+          call->telegram ? qnzapret::kTelegramBusName
+                         : qnzapret::kRuntimeBusName,
+          call->telegram ? qnzapret::kTelegramInterface
+                         : qnzapret::kRuntimeInterface,
+          nullptr,
+          call->telegram ? qnzapret::kTelegramObjectPath
+                         : qnzapret::kRuntimeObjectPath,
+          nullptr, G_DBUS_SIGNAL_FLAGS_NONE, HandleDbusSignal, plugin, nullptr);
     }
-    RespondAsync(context);
-    return;
+    g_dbus_connection_call(
+        connection,
+        call->telegram ? qnzapret::kTelegramBusName : qnzapret::kRuntimeBusName,
+        call->telegram ? qnzapret::kTelegramObjectPath
+                       : qnzapret::kRuntimeObjectPath,
+        call->telegram ? qnzapret::kTelegramInterface
+                       : qnzapret::kRuntimeInterface,
+        call->method.c_str(), call->arguments, nullptr, G_DBUS_CALL_FLAGS_NONE,
+        call->timeout, plugin->cancellable, call->callback, call->data);
   }
-  RespondAsync(context);
+  g_clear_pointer(&call->arguments, g_variant_unref);
+  UnrefPlugin(plugin);
+  delete call;
 }
 
-void StartSystemRuntime(AsyncMethodContext* context) {
-  g_dbus_proxy_call(context->runtime, "Start",
-                    g_variant_new("(s)", context->profile.c_str()),
-                    G_DBUS_CALL_FLAGS_NONE, 120000, nullptr,
-                    OnRuntimeStarted, context);
+void Call(LinuxProxyRuntimePlugin* plugin, bool telegram, const char* method,
+          GVariant* arguments, int timeout, GAsyncReadyCallback callback,
+          gpointer data) {
+  ++plugin->refs;
+  auto* call = new BusCall{
+      plugin,   telegram,
+      method,   arguments == nullptr ? nullptr : g_variant_ref_sink(arguments),
+      callback, data,
+      timeout};
+  g_bus_get(telegram ? G_BUS_TYPE_SESSION : G_BUS_TYPE_SYSTEM,
+            plugin->cancellable, OnBusReady, call);
+}
+
+GVariant* Finish(GObject* source, GAsyncResult* result, GError** error) {
+  if (source == nullptr)
+    return static_cast<GVariant*>(
+        g_task_propagate_pointer(G_TASK(result), error));
+  return g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), result,
+                                       error);
+}
+
+void Complete(Request* request, FlValue* value = nullptr) {
+  if (!request->plugin->disposed && request->call != nullptr) {
+    if (request->error_code.empty())
+      fl_method_call_respond_success(request->call, value, nullptr);
+    else
+      fl_method_call_respond_error(request->call, request->error_code.c_str(),
+                                   request->error_message.c_str(), nullptr,
+                                   nullptr);
+  }
+  if (value != nullptr) fl_value_unref(value);
+  g_clear_object(&request->call);
+  g_clear_object(&request->telegram_app);
+  UnrefPlugin(request->plugin);
+  delete request;
+}
+
+void CaptureError(Request* request, GError* error, const char* code) {
+  if (!request->error_code.empty()) return;
+  request->error_code = ErrorCode(error, code);
+  request->error_message =
+      error ? error->message : "Команда Linux runtime не выполнена.";
+}
+
+void OnTelegramSnapshot(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  CacheSnapshot(request->plugin, true, value);
+  FlValue* snapshot = MergedSnapshot(request->plugin);
+  if (request->call == nullptr)
+    SendEvent(request->plugin, "snapshot", "snapshot", snapshot);
+  Complete(request, request->call == nullptr ? nullptr : snapshot);
+}
+
+void OnRuntimeSnapshot(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  if (value == nullptr) {
+    CaptureError(request, error, "linux_backend_unavailable");
+    Complete(request);
+    return;
+  }
+  CacheSnapshot(request->plugin, false, value);
+  Call(request->plugin, true, "GetSnapshot", nullptr, 5000, OnTelegramSnapshot,
+       request);
+}
+
+void OnTelegramPrepared(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  gboolean granted = false;
+  const gchar* message = "Telegram sidecar недоступен.";
+  if (value != nullptr) {
+    g_autoptr(GVariant) dictionary = g_variant_get_child_value(value, 0);
+    g_variant_lookup(dictionary, "granted", "b", &granted);
+    g_variant_lookup(dictionary, "message", "&s", &message);
+    if (!granted) request->error_message = message;
+  } else
+    request->error_message = message;
+  FlValue* response = fl_value_new_map();
+  fl_value_set_string_take(
+      response, "granted",
+      fl_value_new_bool(granted && request->error_message.empty()));
+  fl_value_set_string_take(
+      response, "message",
+      fl_value_new_string(request->error_message.empty()
+                              ? "Сервисы готовы к запуску."
+                              : request->error_message.c_str()));
+  Complete(request, response);
+}
+
+void OnRuntimePrepared(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  if (value == nullptr) {
+    CaptureError(request, error, "linux_backend_unavailable");
+    Complete(request);
+    return;
+  }
+  g_autoptr(GVariant) dictionary = g_variant_get_child_value(value, 0);
+  gboolean granted = false;
+  const gchar* message = "Linux runtime не готов.";
+  g_variant_lookup(dictionary, "granted", "b", &granted);
+  g_variant_lookup(dictionary, "message", "&s", &message);
+  if (!granted) request->error_message = message;
+  Call(request->plugin, true, "Prepare", nullptr, 10000, OnTelegramPrepared,
+       request);
+}
+
+void OnRollback(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  if (value == nullptr)
+    request->error_message +=
+        " Не удалось откатить системный сервис: " + std::string(error->message);
+  Complete(request);
+}
+
+void FinishTelegramSetup(Request* request, bool opened) {
+  if (!opened) {
+    const char* message =
+        "Не удалось открыть настройку Telegram. Установите Telegram Desktop и "
+        "повторите «Настроить Telegram».";
+    if (request->method == "setupTelegram") {
+      request->error_code = "linux_telegram_setup_failed";
+      request->error_message = message;
+    } else {
+      FlValue* log = fl_value_new_map();
+      fl_value_set_string_take(log, "timestampMillis",
+                               fl_value_new_int(g_get_real_time() / 1000));
+      fl_value_set_string_take(log, "level", fl_value_new_string("warning"));
+      fl_value_set_string_take(log, "source",
+                               fl_value_new_string("telegram-setup"));
+      fl_value_set_string_take(
+          log, "code", fl_value_new_string("linux_telegram_setup_failed"));
+      fl_value_set_string_take(log, "message", fl_value_new_string(message));
+      SendEvent(request->plugin, "log", "log", log);
+    }
+  }
+  Complete(request);
+}
+
+void OnTelegramLaunched(GObject* source, GAsyncResult* result, gpointer data) {
+  g_autoptr(GError) error = nullptr;
+  const bool opened =
+      g_app_info_launch_uris_finish(G_APP_INFO(source), result, &error);
+  // GError может содержать URI с secret: наружу передаётся только безопасный
+  // текст.
+  FinishTelegramSetup(static_cast<Request*>(data), opened);
+}
+
+void LaunchTelegramFallback(Request* request) {
+  GList* uris =
+      g_list_append(nullptr, const_cast<char*>(request->setup_uri.c_str()));
+  g_app_info_launch_uris_async(request->telegram_app, uris, nullptr,
+                               request->plugin->cancellable, OnTelegramLaunched,
+                               request);
+  g_list_free(uris);
+}
+
+void OnTelegramOpened(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) response = Finish(source, result, &error);
+  if (response != nullptr)
+    FinishTelegramSetup(request, true);
+  else
+    LaunchTelegramFallback(request);
+}
+
+void OnTelegramSetupUri(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) response = Finish(source, result, &error);
+  if (response == nullptr) {
+    FinishTelegramSetup(request, false);
+    return;
+  }
+  const gchar* uri = nullptr;
+  g_variant_get(response, "(&s)", &uri);
+  if (uri == nullptr ||
+      !g_str_has_prefix(uri,
+                        "tg://proxy?server=127.0.0.1&port=1443&secret=dd")) {
+    FinishTelegramSetup(request, false);
+    return;
+  }
+  request->setup_uri = uri;
+  request->telegram_app = g_app_info_get_default_for_uri_scheme("tg");
+  if (request->telegram_app == nullptr) {
+    FinishTelegramSetup(request, false);
+    return;
+  }
+  const char* id = g_app_info_get_id(request->telegram_app);
+  std::string name = id == nullptr ? "" : id;
+  if (g_str_has_suffix(name.c_str(), ".desktop")) name.resize(name.size() - 8);
+  if (!g_dbus_is_name(name.c_str()) || name.empty() || name.front() == ':') {
+    LaunchTelegramFallback(request);
+    return;
+  }
+  std::string path = "/";
+  for (const char ch : name) path += ch == '.' ? '/' : ch == '-' ? '_' : ch;
+  if (!g_variant_is_object_path(path.c_str())) {
+    LaunchTelegramFallback(request);
+    return;
+  }
+  const gchar* uris[] = {request->setup_uri.c_str(), nullptr};
+  g_dbus_connection_call(
+      G_DBUS_CONNECTION(source), name.c_str(), path.c_str(),
+      "org.freedesktop.Application", "Open",
+      g_variant_new("(^as@a{sv})", uris,
+                    g_variant_new_array(G_VARIANT_TYPE("{sv}"), nullptr, 0)),
+      nullptr, G_DBUS_CALL_FLAGS_NONE, 5000, request->plugin->cancellable,
+      OnTelegramOpened, request);
+}
+
+void SetupTelegram(Request* request) {
+  Call(request->plugin, true, "GetSetupUri", nullptr, 5000, OnTelegramSetupUri,
+       request);
 }
 
 void OnTelegramStarted(GObject* source, GAsyncResult* result, gpointer data) {
-  auto* context = static_cast<AsyncMethodContext*>(data);
+  auto* request = static_cast<Request*>(data);
   g_autoptr(GError) error = nullptr;
-  g_autoptr(GVariant) response =
-      g_dbus_proxy_call_finish(G_DBUS_PROXY(source), result, &error);
-  if (response == nullptr) {
-    CaptureAsyncError(context, error, "linux_telegram_start_failed");
-    RespondAsync(context);
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  if (value == nullptr) {
+    CaptureError(request, error, "linux_telegram_start_failed");
+    Call(request->plugin, false, "Stop", nullptr, 150000, OnRollback, request);
+  } else {
+    SetupTelegram(request);
+  }
+}
+
+void OnRuntimeStarted(GObject* source, GAsyncResult* result, gpointer data) {
+  auto* request = static_cast<Request*>(data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  if (value == nullptr) {
+    CaptureError(request, error, "linux_nfqws_start_failed");
+    Complete(request);
     return;
   }
-  StartSystemRuntime(context);
+  if (!request->telegram_required) {
+    Complete(request);
+    return;
+  }
+  Call(request->plugin, true, "Start", nullptr, 15000, OnTelegramStarted,
+       request);
 }
 
 void OnTelegramStopped(GObject* source, GAsyncResult* result, gpointer data) {
-  auto* context = static_cast<AsyncMethodContext*>(data);
+  auto* request = static_cast<Request*>(data);
   g_autoptr(GError) error = nullptr;
-  g_autoptr(GVariant) response =
-      g_dbus_proxy_call_finish(G_DBUS_PROXY(source), result, &error);
-  if (response == nullptr) {
-    CaptureAsyncError(context, error, "linux_telegram_stop_failed");
-  }
-  RespondAsync(context);
-}
-
-void StopTelegram(AsyncMethodContext* context) {
-  if (context->telegram == nullptr) {
-    RespondAsync(context);
-    return;
-  }
-  g_dbus_proxy_call(context->telegram, "Stop", nullptr,
-                    G_DBUS_CALL_FLAGS_NONE, 15000, nullptr,
-                    OnTelegramStopped, context);
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  if (value == nullptr)
+    CaptureError(request, error, "linux_telegram_stop_failed");
+  Complete(request);
 }
 
 void OnRuntimeStopped(GObject* source, GAsyncResult* result, gpointer data) {
-  auto* context = static_cast<AsyncMethodContext*>(data);
+  auto* request = static_cast<Request*>(data);
   g_autoptr(GError) error = nullptr;
-  g_autoptr(GVariant) response =
-      g_dbus_proxy_call_finish(G_DBUS_PROXY(source), result, &error);
-  if (response == nullptr) {
-    CaptureAsyncError(context, error, "linux_stop_failed");
+  g_autoptr(GVariant) value = Finish(source, result, &error);
+  if (value == nullptr) {
+    // Отказ в авторизации не должен выключать только половину сервисов.
+    CaptureError(request, error, "linux_stop_failed");
+    Complete(request);
+    return;
   }
-  StopTelegram(context);
+  Call(request->plugin, true, "Stop", nullptr, 15000, OnTelegramStopped,
+       request);
 }
 
-void HandleMethodCall(FlMethodChannel*,
-                      FlMethodCall* call,
-                      gpointer user_data) {
-  auto* plugin = static_cast<LinuxProxyRuntimePlugin*>(user_data);
+Request* NewRequest(LinuxProxyRuntimePlugin* plugin, FlMethodCall* call) {
+  ++plugin->refs;
+  return new Request{
+      plugin, call ? FL_METHOD_CALL(g_object_ref(call)) : nullptr,
+      "",     "",
+      "",     "",
+      true};
+}
+
+void HandleMethodCall(FlMethodChannel*, FlMethodCall* call, gpointer data) {
+  auto* plugin = static_cast<LinuxProxyRuntimePlugin*>(data);
   const std::string method = fl_method_call_get_name(call);
-  if (method == "getSnapshot") {
-    g_autoptr(GError) error = nullptr;
-    g_autoptr(FlValue) snapshot = MergedSnapshot(plugin, &error);
-    if (snapshot == nullptr) {
-      RespondError(call, error, "linux_backend_unavailable");
+  auto* request = NewRequest(plugin, call);
+  request->method = method;
+  if (method == "getSnapshot")
+    Call(plugin, false, "GetSnapshot", nullptr, 5000, OnRuntimeSnapshot,
+         request);
+  else if (method == "prepare")
+    Call(plugin, false, "Prepare", nullptr, 10000, OnRuntimePrepared, request);
+  else if (method == "start") {
+    if (!SerializeProfile(fl_method_call_get_args(call), &request->profile,
+                          &request->error_message)) {
+      request->error_code = "linux_profile_invalid";
+      Complete(request);
       return;
     }
-    fl_method_call_respond_success(call, snapshot, nullptr);
-    return;
+    request->telegram_required = BoolValue(
+        fl_value_lookup_string(fl_method_call_get_args(call), "config"),
+        "cloudflareEnabled", true);
+    Call(plugin, false, "Start", g_variant_new("(s)", request->profile.c_str()),
+         150000, OnRuntimeStarted, request);
+  } else if (method == "setupTelegram") {
+    SetupTelegram(request);
+  } else if (method == "stop")
+    Call(plugin, false, "Stop", nullptr, 150000, OnRuntimeStopped, request);
+  else {
+    fl_method_call_respond_not_implemented(call, nullptr);
+    g_clear_object(&request->call);
+    Complete(request);
   }
-  if (method == "prepare") {
-    g_autoptr(GError) error = nullptr;
-    g_autoptr(GVariant) runtime =
-        CallProxy(plugin, false, "Prepare", nullptr, 10000, &error);
-    if (runtime == nullptr) {
-      RespondError(call, error, "linux_backend_unavailable");
-      return;
-    }
-    g_autoptr(GVariant) result = ExtractDictionary(runtime);
-    gboolean granted = false;
-    const gchar* message = "";
-    g_variant_lookup(result, "granted", "b", &granted);
-    g_variant_lookup(result, "message", "&s", &message);
-
-    g_autoptr(GError) telegram_error = nullptr;
-    g_autoptr(GVariant) telegram =
-        CallProxy(plugin, true, "Prepare", nullptr, 10000, &telegram_error);
-    if (telegram == nullptr) {
-      granted = false;
-      message = "Telegram sidecar недоступен.";
-    } else {
-      gboolean telegram_granted = false;
-      const gchar* telegram_message = "";
-      g_autoptr(GVariant) telegram_result = ExtractDictionary(telegram);
-      g_variant_lookup(telegram_result, "granted", "b", &telegram_granted);
-      g_variant_lookup(telegram_result, "message", "&s", &telegram_message);
-      if (!telegram_granted) {
-        granted = false;
-        message = telegram_message;
-      }
-    }
-    g_autoptr(FlValue) response = fl_value_new_map();
-    fl_value_set_string_take(response, "granted",
-                             fl_value_new_bool(granted));
-    fl_value_set_string_take(response, "message",
-                             fl_value_new_string(message));
-    fl_method_call_respond_success(call, response, nullptr);
-    return;
-  }
-  if (method == "start") {
-    std::string profile;
-    std::string serialization_error;
-    if (!SerializeProfile(fl_method_call_get_args(call), &profile,
-                          &serialization_error)) {
-      fl_method_call_respond_error(call, "linux_profile_invalid",
-                                   serialization_error.c_str(), nullptr,
-                                   nullptr);
-      return;
-    }
-    FlValue* config = fl_value_lookup_string(fl_method_call_get_args(call),
-                                             "config");
-    const bool telegram_required =
-        BoolValue(config, "cloudflareEnabled", true);
-    g_autoptr(GError) runtime_error = nullptr;
-    GDBusProxy* runtime = EnsureProxy(plugin, false, &runtime_error);
-    if (runtime == nullptr) {
-      RespondError(call, runtime_error, "linux_backend_unavailable");
-      return;
-    }
-    g_autoptr(GError) telegram_error = nullptr;
-    GDBusProxy* telegram = telegram_required
-                               ? EnsureProxy(plugin, true, &telegram_error)
-                               : nullptr;
-    if (telegram_required && telegram == nullptr) {
-      RespondError(call, telegram_error, "linux_telegram_start_failed");
-      return;
-    }
-    auto* context = NewAsyncContext(call, runtime, telegram);
-    context->profile = profile;
-    if (telegram == nullptr) {
-      StartSystemRuntime(context);
-    } else {
-      g_dbus_proxy_call(telegram, "Start", nullptr, G_DBUS_CALL_FLAGS_NONE,
-                        15000, nullptr, OnTelegramStarted, context);
-    }
-    return;
-  }
-  if (method == "stop") {
-    g_autoptr(GError) runtime_error = nullptr;
-    GDBusProxy* runtime = EnsureProxy(plugin, false, &runtime_error);
-    if (runtime == nullptr) {
-      RespondError(call, runtime_error, "linux_backend_unavailable");
-      return;
-    }
-    g_autoptr(GError) telegram_error = nullptr;
-    GDBusProxy* telegram = EnsureProxy(plugin, true, &telegram_error);
-    auto* context = NewAsyncContext(call, runtime, telegram);
-    if (telegram == nullptr) {
-      CaptureAsyncError(context, telegram_error, "linux_telegram_stop_failed");
-    }
-    g_dbus_proxy_call(runtime, "Stop", nullptr, G_DBUS_CALL_FLAGS_NONE,
-                      120000, nullptr, OnRuntimeStopped, context);
-    return;
-  }
-  fl_method_call_respond_not_implemented(call, nullptr);
 }
 
+FlMethodErrorResponse* ListenHandler(FlEventChannel*, FlValue*, gpointer data) {
+  auto* plugin = static_cast<LinuxProxyRuntimePlugin*>(data);
+  plugin->listening = true;
+  Call(plugin, false, "GetSnapshot", nullptr, 5000, OnRuntimeSnapshot,
+       NewRequest(plugin, nullptr));
+  return nullptr;
+}
+FlMethodErrorResponse* CancelHandler(FlEventChannel*, FlValue*, gpointer data) {
+  static_cast<LinuxProxyRuntimePlugin*>(data)->listening = false;
+  return nullptr;
+}
 }  // namespace
 
 LinuxProxyRuntimePlugin* linux_proxy_runtime_plugin_new(FlView* view) {
   auto* plugin = new LinuxProxyRuntimePlugin();
-  FlBinaryMessenger* messenger = fl_engine_get_binary_messenger(
-      fl_view_get_engine(view));
+  auto* messenger = fl_engine_get_binary_messenger(fl_view_get_engine(view));
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   plugin->method_channel = fl_method_channel_new(
       messenger, "dev.qnzapret/proxy_runtime", FL_METHOD_CODEC(codec));
-  fl_method_channel_set_method_call_handler(
-      plugin->method_channel, HandleMethodCall, plugin, nullptr);
+  fl_method_channel_set_method_call_handler(plugin->method_channel,
+                                            HandleMethodCall, plugin, nullptr);
   plugin->event_channel = fl_event_channel_new(
-      messenger, "dev.qnzapret/proxy_runtime/events",
-      FL_METHOD_CODEC(codec));
-  fl_event_channel_set_stream_handlers(
-      plugin->event_channel, ListenHandler, CancelHandler, plugin, nullptr);
+      messenger, "dev.qnzapret/proxy_runtime/events", FL_METHOD_CODEC(codec));
+  fl_event_channel_set_stream_handlers(plugin->event_channel, ListenHandler,
+                                       CancelHandler, plugin, nullptr);
   return plugin;
 }
 
 void linux_proxy_runtime_plugin_free(LinuxProxyRuntimePlugin* plugin) {
-  if (plugin == nullptr) {
-    return;
-  }
-  if (plugin->runtime_signal_id != 0 && plugin->runtime_proxy != nullptr) {
-    g_dbus_connection_signal_unsubscribe(
-        g_dbus_proxy_get_connection(plugin->runtime_proxy),
-        plugin->runtime_signal_id);
-  }
-  if (plugin->telegram_signal_id != 0 && plugin->telegram_proxy != nullptr) {
-    g_dbus_connection_signal_unsubscribe(
-        g_dbus_proxy_get_connection(plugin->telegram_proxy),
-        plugin->telegram_signal_id);
-  }
-  g_clear_object(&plugin->runtime_proxy);
-  g_clear_object(&plugin->telegram_proxy);
-  g_clear_object(&plugin->method_channel);
-  g_clear_object(&plugin->event_channel);
-  delete plugin;
+  if (plugin == nullptr) return;
+  plugin->disposed = true;
+  g_cancellable_cancel(plugin->cancellable);
+  if (plugin->runtime_signal_id)
+    g_dbus_connection_signal_unsubscribe(plugin->runtime_connection,
+                                         plugin->runtime_signal_id);
+  if (plugin->telegram_signal_id)
+    g_dbus_connection_signal_unsubscribe(plugin->telegram_connection,
+                                         plugin->telegram_signal_id);
+  g_clear_object(&plugin->runtime_connection);
+  g_clear_object(&plugin->telegram_connection);
+  fl_method_channel_set_method_call_handler(plugin->method_channel, nullptr,
+                                            nullptr, nullptr);
+  fl_event_channel_set_stream_handlers(plugin->event_channel, nullptr, nullptr,
+                                       nullptr, nullptr);
+  UnrefPlugin(plugin);
 }

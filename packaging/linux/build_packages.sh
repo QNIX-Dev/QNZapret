@@ -23,6 +23,8 @@ install -Dm0755 "$bundle_dir/libexec/qnzapret-runtime" \
   "$stage_dir/usr/libexec/qnzapret-runtime"
 install -Dm0755 "$bundle_dir/libexec/qnzapret-telegram-sidecar" \
   "$stage_dir/usr/libexec/qnzapret-telegram-sidecar"
+install -Dm0644 "$bundle_dir/libexec/component_updater.py" \
+  "$stage_dir/usr/libexec/qnzapret-component-updater.py"
 mkdir -p "$stage_dir/usr/lib/qnzapret"
 cp -a "$bundle_dir/runtime" "$stage_dir/usr/lib/qnzapret/runtime"
 cp -a "$bundle_dir/telegram" "$stage_dir/usr/lib/qnzapret/telegram"
@@ -55,6 +57,8 @@ install -Dm0644 "$repo_dir/docs/linux_runtime_handoff.md" \
   "$stage_dir/usr/share/doc/qnzapret/linux_runtime_handoff.md"
 install -Dm0644 "$repo_dir/docs/linux_packaging.md" \
   "$stage_dir/usr/share/doc/qnzapret/linux_packaging.md"
+install -Dm0644 "$repo_dir/docs/linux_component_updates.md" \
+  "$stage_dir/usr/share/doc/qnzapret/linux_component_updates.md"
 install -Dm0644 \
   "$repo_dir/runtime/assets/qnzapret/THIRD_PARTY_NOTICES.md" \
   "$stage_dir/usr/share/doc/qnzapret/THIRD_PARTY_NOTICES.md"
@@ -73,7 +77,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: QNZapret <dev@qnix.dev>
 Installed-Size: $installed_size
-Depends: nftables, python3, python3-cryptography, systemd, polkitd | policykit-1, libgtk-3-0 | libgtk-3-0t64, libglib2.0-0, libstdc++6
+Depends: nftables, python3, python3-cryptography, python3-certifi, python3-httpx, python3-h2, ca-certificates, systemd, polkitd | policykit-1, libgtk-3-0 | libgtk-3-0t64, libglib2.0-0, libstdc++6
 Description: QNZapret desktop DPI-bypass client
  Unprivileged Flutter UI with a Polkit-authorized NFQUEUE runtime.
 EOF

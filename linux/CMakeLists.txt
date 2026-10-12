@@ -79,6 +79,10 @@ target_compile_options(qnzapret-telegram-sidecar PRIVATE
 target_link_libraries(qnzapret-telegram-sidecar PRIVATE PkgConfig::GIO)
 
 enable_testing()
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME qnzapret-component-updater
+  COMMAND ${Python3_EXECUTABLE} -B -m unittest discover
+    -s "${CMAKE_SOURCE_DIR}/components" -p "*_test.py")
 add_executable(qnzapret-runtime-tests
   "runtime/runtime_contract_test.cc"
   "runtime/runtime_contract.cc"
@@ -157,6 +161,10 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/../runtime/assets/qnzapret/"
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/../runtime/telegram/flowseal/"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/telegram"
   COMPONENT Runtime)
+install(FILES "${CMAKE_SOURCE_DIR}/components/qnzapret_telegram.py"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/telegram/adapter" COMPONENT Runtime)
+install(FILES "${CMAKE_SOURCE_DIR}/components/component_updater.py"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/libexec" COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)

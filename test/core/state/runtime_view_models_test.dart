@@ -3,6 +3,40 @@ import 'package:qnzapret/core/backend/backend.dart';
 import 'package:qnzapret/core/state/runtime_view_models.dart';
 
 void main() {
+  test('Telegram listener alone requires setup and is not green', () {
+    final snapshot = ProxyRuntimeSnapshot.fromMap({
+      'platform': 'linux',
+      'state': 'running',
+      'telegramSidecarState': 'running',
+      'telegramCompatibilityProxyReady': false,
+      'telegramCompatibilitySetupRequired': true,
+    });
+    expect(snapshot.telegramStatusLabel, 'Нужна настройка');
+    expect(snapshot.telegramStatusTone, RuntimeStatusTone.warning);
+    expect(
+      snapshot
+          .copyWith(telegramCompatibilitySetupRequired: false)
+          .telegramStatusLabel,
+      'Ожидает Telegram',
+    );
+  });
+
+  test('Telegram requires a live bridge for connected state', () {
+    final snapshot = ProxyRuntimeSnapshot.fromMap({
+      'platform': 'linux',
+      'state': 'running',
+      'telegramSidecarState': 'running',
+      'telegramCompatibilityProxyReady': true,
+    });
+    expect(snapshot.telegramStatusLabel, 'Подключён');
+    expect(snapshot.telegramStatusTone, RuntimeStatusTone.success);
+    expect(
+      snapshot
+          .copyWith(telegramSidecarState: TelegramSidecarState.failed)
+          .telegramStatusTone,
+      RuntimeStatusTone.danger,
+    );
+  });
   test('running is successful only when interception is ready', () {
     final snapshot = ProxyRuntimeSnapshot.fromMap({
       'platform': 'linux',

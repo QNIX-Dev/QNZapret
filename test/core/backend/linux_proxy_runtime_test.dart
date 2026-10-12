@@ -22,6 +22,18 @@ void main() {
     expect(runtime.platform, ProxyPlatform.linux);
   });
 
+  test('Telegram setup stays inside the platform adapter', () async {
+    final calls = <MethodCall>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      calls.add(call);
+      return null;
+    });
+    const runtime = LinuxProxyRuntime(channel: channel);
+    await runtime.setupTelegramProxy();
+    expect(calls.single.method, 'setupTelegram');
+    expect(calls.single.arguments, isNull);
+  });
+
   test('Linux adapter maps prepare and NFQUEUE snapshot', () async {
     messenger.setMockMethodCallHandler(channel, (call) async {
       return switch (call.method) {

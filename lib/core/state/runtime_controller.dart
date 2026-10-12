@@ -107,8 +107,8 @@ class RuntimeViewState {
       RuntimeStatusItem(
         kind: RuntimeStatusKind.telegram,
         title: 'Telegram',
-        statusLabel: snapshot.telegramSidecarState.label,
-        tone: snapshot.telegramSidecarState.tone,
+        statusLabel: snapshot.telegramStatusLabel,
+        tone: snapshot.telegramStatusTone,
         animated: snapshot.telegramSidecarState.isTransitioning,
       ),
       RuntimeStatusItem(
@@ -258,6 +258,22 @@ class RuntimeController extends Notifier<RuntimeViewState> {
         level: RuntimeLogLevel.system,
         source: RuntimeLogSource.bridge,
         message: 'Состояние обновлено.',
+      );
+    } else {
+      _emitFailure(controller.lastFailure);
+    }
+  }
+
+  Future<void> setupTelegramProxy() async {
+    final controller = _runtimeController;
+    if (controller == null) return;
+    final opened = await controller.setupTelegramProxy();
+    _syncFromRuntimeController();
+    if (opened) {
+      _emitLog(
+        level: RuntimeLogLevel.info,
+        source: RuntimeLogSource.app,
+        message: 'Подтвердите подключение локального прокси в окне Telegram.',
       );
     } else {
       _emitFailure(controller.lastFailure);

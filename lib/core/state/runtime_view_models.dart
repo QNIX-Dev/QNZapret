@@ -87,6 +87,25 @@ extension ProxyPlatformUi on ProxyPlatform {
 }
 
 extension ProxyRuntimeSnapshotUi on ProxyRuntimeSnapshot {
+  String get telegramStatusLabel {
+    if (telegramSidecarState != TelegramSidecarState.running) {
+      return telegramSidecarState.label;
+    }
+    if (telegramCompatibilityProxyReady) return 'Подключён';
+    return telegramCompatibilitySetupRequired
+        ? 'Нужна настройка'
+        : 'Ожидает Telegram';
+  }
+
+  RuntimeStatusTone get telegramStatusTone {
+    if (telegramSidecarState != TelegramSidecarState.running) {
+      return telegramSidecarState.tone;
+    }
+    return telegramCompatibilityProxyReady
+        ? RuntimeStatusTone.success
+        : RuntimeStatusTone.warning;
+  }
+
   bool get isTransitioning => state.isBusy;
 
   bool get hasFailure => state == ProxyRuntimeState.failed;

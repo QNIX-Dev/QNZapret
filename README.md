@@ -1,215 +1,118 @@
 # QNZapret
 
-QNZapret - кроссплатформенный клиент для локального перенаправления трафика и применения DPI-bypass стратегий.
-Приложение собрано как Flutter-продукт с нативными Android и Linux runtime за стабильным Dart-контрактом.
+QNZapret — Flutter-приложение для локального обхода региональных сетевых
+ограничений. Android использует VPN-перенаправление без root, Linux —
+привилегированный NFQUEUE runtime с отдельным непривилегированным интерфейсом.
+Удалённый VPN-сервер для этих основных маршрутов не требуется.
 
-Если совсем на пальцах: QNZapret поднимает локальный Android VPN, забирает трафик устройства, пропускает его через локальный strategy proxy, применяет правила обхода и открывает реальные сетевые соединения из приложения через защищенные Android sockets. Для основного Android-пути не нужен удаленный VPN-сервер.
+Состояние документации сверено с веткой `quriee` **12 октября 2026 года**.
+Реализованный механизм не гарантирует доступность каждого ресурса у любого
+провайдера: работоспособность проверяется на конкретной сети.
 
-## Что Делает Приложение
+## Платформы
 
-- Дает пользовательский Flutter-интерфейс на Material 3.
-- Использует Android `VpnService` для локального перехвата трафика.
-- Передает TUN-трафик в локальный SOCKS5 strategy proxy через `hev-socks5-tunnel`.
-- Применяет HTTP, TLS и QUIC-ориентированные правила из общего `StrategyProfile`.
-- Не блокирует весь трафик: если поток не попал под правила, он идет direct.
-- Дает Android foreground notification, actions и Quick Settings tile для управления.
-- Поднимает Telegram compatibility mode через локальный Kotlin MTProxy endpoint.
+| Платформа | Реализация | Проверки текущего состояния |
+| --- | --- | --- |
+| Android | Kotlin `VpnService`, `hev-socks5-tunnel`, локальный SOCKS5 strategy proxy, Kotlin MTProxy для Telegram | Release AAB собирается; новый прогон на телефоне требуется отдельно |
+| Linux x86_64 | C++/GIO daemon, Polkit, nftables/NFQUEUE, `nfqws2`, пользовательский Python Telegram sidecar | DEB установлен и проверен на Ubuntu 26.04; HTTP/TLS, Telegram bridge и аварийная очистка проверены |
+| Windows | Flutter runner и `StubProxyRuntime` | Реального обхода нет; сборка выполняется на Windows/CI |
 
-## Как Устроен Android Runtime
+Цели Linux-упаковки — Debian 12, Ubuntu 24.04+ и Fedora 44 с systemd.
+Проверка текущей сборки в чистых Debian/Fedora ещё нужна перед публичным релизом.
 
-Основной Android-путь выглядит так:
-
-```text
-Flutter UI
-  -> Dart ProxyRuntime contract
-  -> Android MethodChannel
-  -> QnzapretVpnService
-  -> Android TUN fd
-  -> hev-socks5-tunnel
-  -> local strategy SOCKS5 proxy
-  -> protected TCP/UDP sockets
-```
-
-Приложение исключает собственный пакет из VPN и использует `VpnService.protect(...)` для runtime-соединений. Это нужно, чтобы исходящий трафик самого QNZapret не зацикливался обратно в туннель.
-
-Нативный runtime на Android написан на Kotlin. Компонент `hev-socks5-tunnel` используется как отдельный TUN-to-SOCKS слой: он переносит пакеты из Android TUN в локальный SOCKS5 proxy, а стратегия и lifecycle остаются в коде QNZapret.
-
-## Telegram Mode
-
-Telegram требует отдельного режима, потому что на некоторых сетях прямой TCP к Telegram DC может блокироваться еще до первого payload. В таком случае обычные payload-level fake/split стратегии просто не успевают включиться.
-
-QNZapret использует compatibility mode:
+## Устройство
 
 ```text
-Telegram client
-  -> local MTProxy 127.0.0.1:1443
-  -> QNZapret Kotlin MTProxy bridge
-  -> WSS /apiws route
-  -> Telegram Web/DC endpoint
+Flutter Home / Logs / Settings
+  -> Riverpod RuntimeController
+  -> ProxyRuntimeController / ProxyRuntime
+     Android -> MethodChannel -> Kotlin VPN/TUN/SOCKS5 runtime
+     Linux   -> async MethodChannel/EventChannel -> D-Bus -> daemon + sidecar
+     Windows -> stub
 ```
 
-Android не позволяет другому приложению молча включить proxy внутри Telegram. Поэтому при первом подключении QNZapret открывает экран подтверждения proxy в Telegram с уже заполненными локальным endpoint и secret. Пользователь подтверждает один раз, после чего QNZapret может поднимать локальный proxy вместе с сервисом.
+В Android TUN включён по умолчанию. Исходящие соединения защищены
+`VpnService.protect`, собственный пакет исключён из VPN. HTTP/TLS hostlists
+включают действия обхода, а не запрещают остальной трафик. QUIC Initial
+обрабатывается отдельно. Linux компилирует переносимый профиль в собственную
+стратегию для `nfqws2`; полная эквивалентность Android socket-действий не заявляется.
 
-Маршруты Telegram могут приходить из:
+Интерфейс содержит управление сервисами, журнал событий, системную/светлую/тёмную
+тему и шесть палитр. Linux получает native-события; Android пока использует
+snapshot и локальные события контроллера, а подробную диагностику пишет в logcat.
 
-- локального `telegram_compat.json` для dev/smoke или приватного route;
-- cached public Flowseal-compatible Cloudflare route defaults;
-- будущего signed QNZapret route config.
+## Telegram и обновления Linux
 
-Для пользователя это локальный режим: ему не нужно владеть SOCKS/VPN-сервером.
+Linux Start запрашивает Polkit, проверяет обновления компонентов, запускает
+NFQUEUE и Telegram sidecar, затем передаёт Telegram профиль `127.0.0.1:1443`.
+Первое подключение подтверждается штатным диалогом Telegram, в том числе до
+входа в аккаунт. Кнопка «Настроить Telegram» повторяет передачу профиля.
+«Подключён» на Linux означает живой MTProto+WS/H2 bridge, а не только listener.
 
-## Strategy Layer
+В поставке: [zapret2 v1.0.5.2](https://github.com/bol-van/zapret2/releases/tag/v1.0.5.2)
+и [tg-ws-proxy v1.11.2](https://github.com/Flowseal/tg-ws-proxy/releases/tag/v1.11.2).
+Обновлятор проверяет официальные stable-релизы, целостность и совместимость,
+публикует версии атомарно в `/var/lib/qnzapret/components`. Ошибка проверки
+оставляет локальную версию. Он не обновляет GUI, Android, Windows или hostlists.
+Подробности: [обновления Linux](docs/linux_component_updates.md).
 
-Дефолтная lightweight-стратегия описана общей Dart/Kotlin моделью:
+Android имеет отдельную Kotlin-реализацию Telegram и не запускает Python/Go-core.
+Её route-provider может обновлять данные маршрутов, но не код компонентов.
 
-- HTTP TCP/80 правила для доменов из списков;
-- TLS TCP/443 правила с поддержкой TLS record split;
-- QUIC UDP/443 обработка QUIC Initial пакетов;
-- direct forwarding для трафика вне strategy lists.
-
-Hostlists - это списки включения bypass-действий, а не allowlist всего соединения. Если TCP-поток не совпал с правилами, он должен пройти обычным protected socket без fake/split.
-
-## UI И Продуктовый Слой
-
-Flutter-часть дает:
-
-- главный экран со статусами runtime и start/stop CTA;
-- экран логов, готовый к native diagnostics stream;
-- настройки темы, палитры и информации о приложении;
-- Material 3 / Expressive визуальную систему;
-- общий `ProxyRuntimeController`, через который UI общается с backend.
-
-UI не вызывает Android-код напрямую. Экранный слой работает через `lib/core/backend/`, а Android/Linux/Windows детали остаются внутри platform adapters.
-
-## Статус Платформ
-
-| Платформа | Статус |
-| --- | --- |
-| Android | Нативный runtime path через `VpnService`, TUN-to-SOCKS, локальный strategy proxy и Telegram compatibility mode. |
-| Linux | Production runtime для x86_64: непривилегированный GUI, system D-Bus daemon, Polkit, nftables/NFQUEUE, bundled `nfqws2` и user-session Telegram sidecar. |
-| Windows | Flutter runner есть; реальный runtime adapter запланирован. |
-
-## Карта Репозитория
-
-```text
-lib/
-  app/                  Flutter app shell, navigation и theme
-  core/backend/         общий runtime contract и Android/Linux adapters
-  core/state/           Riverpod application state и runtime view models
-  core/ui/              design tokens и общие UI components
-  features/             Home, Logs и Settings screens
-
-android/app/src/main/
-  kotlin/dev/qnzapret/  Android runtime, VPN service, strategy proxy и Telegram mode
-  jni/                  native hev-socks5-tunnel integration
-runtime/assets/qnzapret/ canonical hostlists, payloads, nfqws2/Lua и provenance
-
-linux/runtime/          system daemon, Telegram sidecar и strategy compiler
-packaging/linux/        systemd, D-Bus, Polkit, AppStream, deb/rpm pipeline
-
-docs/                   архитектура, runtime contracts и Android handoff
-qndocs/                 branch-specific agent/workflow documentation
-```
-
-## Запуск И Сборка
-
-Установите Flutter и Android tooling, затем подтяните зависимости:
+## Разработка
 
 ```bash
+git clone --branch quriee --recurse-submodules https://github.com/QNIX-Dev/QNZapret.git
+cd QNZapret
 flutter pub get
+flutter devices
+flutter run -d <ANDROID_DEVICE_ID>
 ```
 
-Запуск на Android:
+Для существующей копии: `git submodule update --init qndocs`.
+Инструкции агента начинаются с [AGENTS.md](AGENTS.md). Подмодуль `qndocs`
+может требовать отдельного доступа к репозиторию документации.
+
+Linux shell можно запускать через `flutter run -d linux`, но полноценный runtime
+требует установленного системного пакета. **Не запускайте GUI через sudo.**
 
 ```bash
-flutter run -d android
-```
-
-Сборка Android artifacts:
-
-```bash
-flutter build apk --release
-flutter build appbundle --release
-```
-
-Запуск desktop-shell:
-
-```bash
-flutter run -d linux
-flutter run -d windows
-```
-
-Windows-сборку нужно делать на Windows-хосте.
-
-Production Linux bundle и пакеты:
-
-```bash
-# Для glibc-портируемого production bundle используйте Debian 12:
-bash packaging/linux/build_bundle_debian12.sh
+flutter build linux --release
 bash packaging/linux/build_packages.sh
+sudo apt install ./build/linux/packages/qnzapret_0.0.6_amd64.deb
+qnzapret
 ```
 
-Поддерживаемый Linux production scope: x86_64, systemd, Fedora 44,
-Debian 12 и Ubuntu 24.04+. Установленный GUI всегда запускается обычным
-пользователем. `Start`/`Stop` обращаются к `dev.qnzapret.Runtime1`; Polkit
-запрашивает административное подтверждение, а GUI не выполняет `sudo`,
-`pkexec`, `nft` или `systemctl`.
-
-Linux использует pinned zapret2 `v0.9.5.2`: HTTP/TLS/QUIC payload filters,
-post-NAT NFQUEUE topology `101/-101`, mark/notrack protection and fail-open
-`queue 200 bypass`. UI distinguishes queue registration, installed nft rules,
-ready interception and Telegram degraded state; process existence alone is not
-reported as a healthy connection.
-
-Диагностика Linux:
-
-```bash
-systemctl status qnzapret-runtime.service
-journalctl -u qnzapret-runtime.service
-systemctl --user status qnzapret-telegram.service
-journalctl --user -u qnzapret-telegram.service
-nft list table inet qnzapret
-```
+Для переносимого baseline Debian 12 используйте контейнерную сборку,
+описанную в [Linux packaging](docs/linux_packaging.md), вместо локального bundle.
+Windows запускается/собирается на Windows-хосте. Android release пока использует
+debug signing и не готов к публикации в магазине.
 
 ## Проверки
 
-Базовый набор для разработки:
-
 ```bash
+dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
+flutter build linux --release
 ctest --test-dir build/linux/x64/release --output-on-failure
+bash packaging/linux/tests/verify_packaging.sh
 sudo test/integration/linux_netns_runtime_test.sh
-cd android && ./gradlew :app:testDebugUnitTest
-flutter build apk --release
+flutter build appbundle --release
 ```
 
-Для Android runtime device smoke важен не меньше unit-тестов. Основные logcat-теги:
+Android JVM: из `android/` выполнить `./gradlew :app:testDebugUnitTest`
+(Windows: `.\gradlew.bat :app:testDebugUnitTest`).
+Полный порядок, условия smoke и ограничения — в
+[процессе разработки и QA](docs/integration_workflow.md).
 
-- `QNZapretService`
-- `QNZapretTun`
-- `QNZapretProxy`
-- `QNZapretNetTest`
-- `QNZapretTgCompat`
+## Документация и ограничения
 
-## Документация
+[Оглавление документации](docs/README.md) содержит контракты, платформенные
+инструкции, известные ограничения и результаты последнего Linux-прогона.
+Версии сейчас расходятся: Flutter/Linux — `0.0.6+6`, Android и подпись в UI —
+`0.0.1f`, build `1`; это известный долг, а не единая версия релиза.
 
-Сначала сюда:
-
-- `docs/project_brief.md` - общий обзор продукта и архитектуры.
-- `docs/runtime_bridge_contract.md` - контракт между Flutter и native runtime.
-- `docs/android_runtime_handoff.md` - состояние Android runtime и handoff.
-- `docs/linux_runtime_handoff.md` - Linux privilege boundary, lifecycle и recovery.
-- `docs/linux_packaging.md` - структура `.deb`/`.rpm`, установка и удаление.
-- `docs/android_telegram_cloudflare_routes.md` - Telegram compatibility routing.
-- `docs/integration_workflow.md` - workflow совместной frontend/backend разработки.
-
-## Для Контрибьюторов
-
-- Держите UI за Dart runtime contract; не вызывайте Android runtime classes из виджетов.
-- Оставляйте Android-specific поведение внутри native adapter/service layer.
-- Обновляйте docs при изменении runtime contracts, lifecycle semantics или платформенных зон ответственности.
-- Не коммитьте приватные route domains, relay credentials и smoke-only secrets.
-- Используйте `.sources/` как reference-зону, а не production-код.
-
-QNZapret задуман как нормальный продукт, а не набор скриптов с кнопкой сверху. Кнопка, конечно, тоже есть. Просто под ней действительно живет runtime.
+Лицензии сторонних компонентов и границы происхождения hostlists описаны в
+[уведомлениях](runtime/assets/qnzapret/THIRD_PARTY_NOTICES.md).
+Единая лицензия собственного кода в корне пока не объявлена.

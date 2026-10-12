@@ -1,212 +1,96 @@
-# Linux runtime handoff
+# Linux runtime: архитектура и эксплуатация
 
-## Scope
+Сверено с веткой `quriee` 12 октября 2026 года. Текущий DEB проверен на Ubuntu
+26.04 x86_64. Целевые Debian 12/Ubuntu 24.04+/Fedora 44 требуют отдельного
+clean-VM smoke перед релизом. Linux использует NFQUEUE, не Android TUN.
 
-Production scope: Linux x86_64, systemd-based Fedora 44, Debian 12 and
-Ubuntu 24.04+. GUI executable is lowercase `qnzapret`; application ID remains
-`dev.qnzapret`.
-
-Linux uses NFQUEUE, not TUN:
+## Граница привилегий
 
 ```text
-Flutter GUI (regular user)
-  -> MethodChannel/EventChannel
-  -> Linux runner
-  -> system D-Bus dev.qnzapret.Runtime1
-  -> Polkit dev.qnzapret.runtime.manage
-  -> qnzapret-runtime (root/systemd)
-  -> bundled nfqws2 + inet qnzapret
-
-Flutter Start/Stop
+Flutter GUI (обычный пользователь)
+  -> async MethodChannel/EventChannel -> C++/GIO runner
+  -> system D-Bus dev.qnzapret.Runtime1 -> Polkit
+     -> root qnzapret-runtime -> nfqws2 -> inet qnzapret
   -> session D-Bus dev.qnzapret.Telegram1
-  -> qnzapret-telegram-sidecar (regular user/systemd --user)
-  -> pinned Flowseal headless core on 127.0.0.1:1443
+     -> user qnzapret-telegram-sidecar -> Python headless Telegram core
 ```
 
-GUI and privileged runtime are never one process. GUI does not execute
-`nft`, `iptables`, `sysctl`, `systemctl`, `pkexec` or a shell.
+GUI не выполняет sudo/pkexec/nft/systemctl/shell. Root нужен установленному
+system daemon, а не Flutter-процессу. Название executable/application ID:
+`qnzapret` / `dev.qnzapret`. D-Bus API version: `1.0.0`.
 
-## System D-Bus and Polkit
+Read-only GetVersion/Prepare/GetSnapshot не требуют Polkit. Start/Stop
+проверяют `dev.qnzapret.runtime.manage` по реальному unique sender system bus:
+active session — `auth_admin_keep`, inactive — `auth_admin`, other — deny.
+Владение активным runtime проверяется по UID; другой пользователь не может
+заменить/остановить transaction через публичный API.
 
-- bus: `dev.qnzapret.Runtime1`
-- object: `/dev/qnzapret/Runtime1`
-- interface: `dev.qnzapret.Runtime1`
-- API version: `1.0.0`
+Синхронная Polkit-проверка выполняется в worker task, GUI D-Bus calls — async.
+События используют кэш snapshot. Открытие GUI не ждёт `network-online.target`.
 
-Read-only `GetVersion`, `Prepare` and `GetSnapshot` are available without
-root. `Start` and `Stop` call PolicyKit `CheckAuthorization` with a
-`system-bus-name` subject built from the real unique D-Bus sender.
+## Start
 
-Default policy:
+1. Runner вызывает system Start; daemon авторизует caller через Polkit.
+2. Для остановленного runtime выполняется bounded проверка обновлений двух
+   компонентов; выбирается trusted cache или встроенная поставка.
+3. Preflight проверяет nft/netfilter, binary/version/Lua API, manifest,
+   compiler/dry-run и отсутствие queue/table conflict.
+4. Daemon берёт `/run/qnzapret/runtime.lock`, компилирует конкретный профиль,
+   делает dry-run и запускает nfqws2 со сбросом UID в `qnzapret-runtime`.
+5. До четырёх секунд асинхронно ждёт NFQUEUE 200, затем атомарно применяет
+   собственную nft table. Публикует readiness и `running`.
+6. Runner запускает user sidecar, ждёт loopback listener до пяти секунд.
+   Отказ sidecar откатывает system runtime через Stop.
+7. Runner доставляет profile URI в Telegram через D-Bus Open, с fallback
+   стандартного tg:// handler. Пользователь подтверждает профиль штатным
+   диалогом, в том числе до входа. Ошибка доставки предупреждает и оставляет
+   сервисы работающими; кнопка «Настроить Telegram» повторяет действие.
 
-- active local session: `auth_admin_keep`;
-- inactive session: `auth_admin`;
-- other contexts: denied.
+Повторный Start активного system runtime того же UID идемпотентен и не
+переписывает компоненты живого worker. Linux default включает sidecar через
+`cloudflareEnabled=true`. Детали shared config и ограничения — в
+[контракте](runtime_bridge_contract.md), обновления — в
+[описании обновлятора](linux_component_updates.md).
 
-The runtime stores the owner UID in its snapshot. A second user cannot replace
-an active transaction. Runtime state is root-owned in `/run/qnzapret`; no
-world-writable socket/config/state is created.
+## Compiler и firewall
 
-## Strategy compiler
+Daemon повторно проверяет сериализованный профиль. Допустимы `direct`, HTTP/TLS
+TCP 80/443, QUIC UDP 443, canonical lists/payloads, `fake`/`udpFake` и
+`split(position=1)` с входным repeats 1. Произвольная shell-строка не принимается.
+Linux endpointPolicies/remote relay не подключены.
 
-`StrategyProfile` is serialized by the runner, then parsed and validated again
-inside the daemon. The compiler accepts only:
+Текущий compiler использует `out-range=-d5`, два fake повтора, HTTP/TLS
+`tcp_ts=-100` + multisplit `seqovl=2,pos=midsld,tcp_ts_up`; TLS привязывает
+`tls_google`, QUIC — `quic_google`, autottl `-1,3-10` и disordered UDP fragments
+position 8. `--bind-fix4/6`, mark `0x40000000`. Полные аргументы —
+`linux/runtime/runtime_contract.cc`; Android действия выполняются иначе.
 
-- `UnmatchedTrafficPolicy.direct`;
-- TCP ports 80/443 and UDP port 443;
-- protocols `http`, `tls`, `quic`;
-- portable actions `fake`, `udpFake`, `split(position=1)` with input repeats
-  equal to 1;
-- canonical `qnzapret/lists/*` and `qnzapret/payloads/*` paths;
-- central queue `200`.
+Единственный принадлежащий приложению firewall-объект — `table inet qnzapret`.
 
-No profile value becomes shell text. `nfqws2` and `nft` are invoked through
-subprocess argument arrays; nftables input is passed through stdin.
-
-Linux compiles that portable profile to a Fedora-smoke-verified strategy for
-the pinned zapret2 `v0.9.5.2` binary rather than reusing Android socket
-semantics. Every protocol uses `out-range=-d5`:
-
-- HTTP: `fake_default_http`, `tcp_ts=-100`, two fake repeats and
-  `multisplit(seqovl=2, pos=midsld, tcp_ts_up)`;
-- TLS: canonical `tls_google` blob, `tcp_ts=-100`, two fake repeats and
-  `multisplit(seqovl=2, pos=midsld, tcp_ts_up)` with that blob as the overlap
-  pattern;
-- QUIC: canonical `quic_google` blob, IPv4/IPv6 autottl `-1,3-10`, two fake
-  repeats, then disordered UDP fragmentation at position 8.
-
-`nfqws2` receives `--fwmark=0x40000000`, `--bind-fix4/6` and canonical blob
-paths, then drops from root to the locked `qnzapret-runtime` system account.
-The Android strategy is deliberately unchanged: its no-root VpnService/socket
-transport requires a separate platform implementation.
-
-## Start transaction
-
-The platform default enables Telegram compatibility on Linux, while the
-Android default remains disabled and keeps its independent no-root strategy.
-Therefore the main Linux Start button is a transaction across both sidecar and
-system runtime.
-
-1. Reject concurrent owner/table/queue conflict and acquire
-   `/run/qnzapret/runtime.lock`.
-2. Verify every file listed by `/usr/lib/qnzapret/runtime/manifest.sha256`.
-3. Compile and validate the strategy.
-4. Execute pinned `nfqws2 --dry-run`.
-5. Start `nfqws2`, dropping its process identity to system user
-   `qnzapret-runtime`.
-6. Asynchronously wait up to four seconds until queue 200 appears in
-   `/proc/net/netfilter/nfnetlink_queue`.
-7. Apply one nft transaction through `nft -f -`.
-8. Publish `running`, `strategyEngineReady`,
-   `trafficForwarderReady` and `trafficInterceptionActive`.
-
-The only owned firewall object is `table inet qnzapret`. Its deterministic,
-atomic topology follows the pinned upstream post-NAT model for IPv4 and IPv6:
-
-| Chain | Hook / priority | Match window |
+| Chain | Hook/priority | Окно пакетов |
 | --- | --- | --- |
-| `predefrag` | output `-401` | marked injected packets and `notrack` handling |
-| `postrouting` | postrouting `101` | TCP dport 80/443 original 1-20; UDP dport 443 original 1-5 |
-| `prerouting` | prerouting `-101` | TCP sport 80/443 reply 1-10; UDP sport 443 reply 1-3 |
+| predefrag_nfqws | output `-401` | notrack для маркированных injected/fragment packets |
+| postrouting | postrouting `101` | original TCP 1–20, UDP 1–5 |
+| prerouting | prerouting `-101` | reply TCP 1–10, UDP 1–3 |
 
-Outgoing rules reject packets carrying `0x40000000`, set post-NAT bit
-`0x20000000`, expose counters and use `queue num 200 bypass`. There is no
-`ct state new`, `flush ruleset`, global sysctl mutation or modification of
-firewalld/ufw objects.
+Правила IPv4/IPv6 имеют mark guard, post-NAT bit `0x20000000`, counters и
+`queue num 200 bypass`. Нет flush ruleset, глобального sysctl или изменения
+чужих firewalld/ufw tables. Наличие bypass — fail-open механизм очереди, не
+доказательство успешного обхода DPI.
 
-## Stop and crash recovery
+## Stop, crash и recovery
 
-Stop order:
+Stop сначала снимает свою table, затем SIGTERM worker; fallback force-exit —
+через три секунды. Очищаются active-profile/lock, возвращается idle; runner
+останавливает Telegram child. Повторный Stop безопасен. Отказ Polkit не должен
+выключать только sidecar. Закрытие GUI не останавливает запущенный обход.
 
-1. Delete only `table inet qnzapret`.
-2. Send SIGTERM to bundled `nfqws2`; use a bounded force-exit fallback.
-3. Remove `/run/qnzapret/active-profile` and release the lock.
-4. Stop the per-user Telegram child.
-5. Publish `idle`.
+При неожиданном exit worker daemon снимает свою table, сбрасывает readiness,
+освобождает lock и публикует `linux_nfqws_unexpected_exit`/failed.
+`ExecStartPre`/`ExecStopPost` вызывают `qnzapret-runtime --cleanup`, который
+удаляет только свою table и volatile files. Global firewall не очищается.
 
-`ExecStartPre` and `ExecStopPost` call
-`/usr/libexec/qnzapret-runtime --cleanup`. The cleanup path removes only the
-QNZapret table and volatile QNZapret files. It never flushes a ruleset or edits
-firewalld/ufw tables.
-
-An async child watch handles unexpected `nfqws2` exit: it deletes
-`inet qnzapret`, clears queue/rules/interception readiness, removes the active
-profile, releases the lock and emits `linux_nfqws_unexpected_exit`. Stop uses
-a three-second bounded force-exit callback and never queries subprocess exit
-state before a completed GLib wait.
-
-Stable failures distinguish parse rejection, dry-run nonzero/signal/spawn,
-worker spawn, queue timeout, nft transaction and unexpected worker exit:
-`linux_profile_parse_rejected`, `linux_profile_dry_run_nonzero`,
-`linux_profile_dry_run_signaled`, `linux_profile_dry_run_spawn_failed`,
-`linux_nfqws_spawn_failed`, `linux_queue_registration_timeout`,
-`linux_nft_transaction_failed`, `linux_nfqws_unexpected_exit`.
-
-## Telegram sidecar
-
-The user unit owns `dev.qnzapret.Telegram1` and supervises only the pinned MIT
-headless `Flowseal/tg-ws-proxy` core. There is no upstream tray/UI.
-
-- endpoint: `127.0.0.1:1443`;
-- state: systemd `StateDirectory=qnzapret`, mode 0700; manual launches fall
-  back to `XDG_STATE_HOME/qnzapret`;
-- secret: `telegram.secret`, mode 0600;
-- logs: bounded rotating file in the same state directory;
-- health: mode-0600 marker distinguishing listener readiness from a live
-  MTProxy handshake plus upstream WS bridge;
-- setup URI: доступен только через session D-Bus `GetSetupUri`; обычный Start
-  не запускает и не поднимает окно Telegram, а лишь держит локальный sidecar в
-  фоне. Уже сохранённый proxy-профиль подключается, когда Telegram запущен;
-- close GUI: system and user runtime continue;
-- Stop: both runtime layers stop.
-
-Sidecar Start returns only after the loopback listener is reachable. Flutter
-Start is transactional: Telegram listener failure prevents system runtime
-start, while later system runtime failure asynchronously rolls the sidecar
-back. Snapshot fields `telegramSidecarState`, `degraded` and
-`partialFailure*` prevent a partial failure from appearing fully healthy.
-
-The system unit uses `MemoryDenyWriteExecute=no`, because bundled LuaJIT needs
-executable mappings. Bounding and ambient capabilities are exactly
-`CAP_NET_ADMIN`, `CAP_NET_RAW`, `CAP_SETUID`, `CAP_SETGID` and `CAP_KILL`.
-The last capability lets the daemon stop a worker after it changes UID; GUI
-and sidecar stay unprivileged.
-
-The secret is not placed in child command-line arguments and the patched
-headless core does not print it or the full setup URI.
-
-Telegram itself requires the user to approve the proxy profile once. On the
-verified Fedora path this confirmation produced a local MTProto connection,
-changed the sidecar snapshot to `ready=true` and established the upstream WS
-bridge. Listener probes use a direct loopback socket, so the hardened user unit
-does not consult dconf or desktop proxy settings once per second.
-
-## Bundled upstream
-
-| Component | Version | Commit | License |
-| --- | --- | --- | --- |
-| `bol-van/zapret2` | `v0.9.5.2` | `7a69d56a4b35f814fb2d42e7bddb2f21c2314ff9` | MIT |
-| `Flowseal/tg-ws-proxy` | `v1.7.0` | `0eebdff69e7cdc2a2babe2de86e1f89a8cf35374` | MIT |
-
-Exact artifact SHA256 values and local tg-ws-proxy patches are recorded in
-`runtime/assets/qnzapret/provenance.json`. Runtime never downloads code or
-binaries.
-
-## Diagnostics
-
-```bash
-systemctl status qnzapret-runtime.service
-journalctl -u qnzapret-runtime.service
-systemctl --user status qnzapret-telegram.service
-journalctl --user -u qnzapret-telegram.service
-gdbus call --system --dest dev.qnzapret.Runtime1 \
-  --object-path /dev/qnzapret/Runtime1 \
-  --method dev.qnzapret.Runtime1.GetSnapshot
-nft list table inet qnzapret
-cat /proc/net/netfilter/nfnetlink_queue
-```
-
-Recovery:
+Ручное восстановление при остановленном/сломавшемся runtime:
 
 ```bash
 sudo systemctl stop qnzapret-runtime.service
@@ -214,19 +98,50 @@ sudo /usr/libexec/qnzapret-runtime --cleanup
 systemctl --user stop qnzapret-telegram.service
 ```
 
-## Known limitations
+Следующее обращение GUI активирует D-Bus helpers. Перехват включится только
+после Start. Эти команды останавливают обход, не являются read-only диагностикой.
 
-- Production packaging is x86_64 only.
-- AppImage/Flatpak/Snap are not production installation paths because they
-  cannot install the privileged system service by themselves.
-- The inherited large `list-general.txt` and payload files have precise
-  QNZapret commit provenance, but their earlier external URL/license was not
-  recorded in Git history. This is explicit in `provenance.json`; legal
-  redistribution review remains required before public distribution.
-- Fedora/Debian clean-VM manual smoke is mandatory for release sign-off.
-- `test/integration/linux_netns_runtime_test.sh` exits 77 without root. As
-  root it creates isolated client/server network namespaces, sends real
-  HTTP/TLS payloads, verifies nft counters and nfqws L7 diagnostics, kills the
-  worker and checks daemon cleanup while preserving a foreign table.
-- Windows release verification runs in Windows CI; it cannot be completed on a
-  Linux host.
+## Telegram sidecar
+
+Headless `Flowseal/tg-ws-proxy` слушает `127.0.0.1:1443` без upstream tray/GUI.
+Отдельный адаптер читает `telegram.secret` из user state, маскирует secret/URI
+и наблюдает WS/H2 bridge. Secret/health — 0600, state directory — 0700.
+Systemd `STATE_DIRECTORY` имеет приоритет; fallback —
+`${XDG_STATE_HOME:-~/.local/state}/qnzapret`. Лог — rotating `telegram.log`,
+2 MiB + один backup.
+
+Listener отражает `telegramSidecarState=running`; только живой bridge даёт
+`telegramCompatibilityProxyReady=true`. При закрытии последнего bridge marker
+возвращается к listener. Нет bridge — «Нужна настройка»/«Ожидает Telegram»,
+есть — «Подключён». Это не доказательство доставки конкретного сообщения.
+
+User unit учитывает AppArmor Ubuntu: нет `ProtectKernelModules=yes`, задан
+`PrivateUsers=no`; filesystem sandbox всё ещё может отображать root как
+overflow UID. Trusted component paths проверяются в том же namespace.
+Глобальные AppArmor/userns настройки не изменяются.
+
+System unit оставляет `MemoryDenyWriteExecute=no` для LuaJIT и caps
+`CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_KILL`. Новые binary dry-run
+и Telegram import validation выполняются без root.
+
+## Диагностика и релиз
+
+```bash
+systemctl status qnzapret-runtime.service
+journalctl -u qnzapret-runtime.service
+systemctl --user status qnzapret-telegram.service
+journalctl --user -u qnzapret-telegram.service
+gdbus call --system --dest dev.qnzapret.Runtime1 \
+  --object-path /dev/qnzapret/Runtime1 --method dev.qnzapret.Runtime1.GetSnapshot
+gdbus call --session --dest dev.qnzapret.Telegram1 \
+  --object-path /dev/qnzapret/Telegram1 --method dev.qnzapret.Telegram1.GetSnapshot
+sudo nft list table inet qnzapret
+cat /proc/net/netfilter/nfnetlink_queue
+```
+
+Не публиковать GetSetupUri/secret и приватные данные логов. Версии/commit/SHA
+поставки — `runtime/assets/qnzapret/provenance.json`; cache содержит отдельный
+component.json и manifest. Политика доверия/rollback — в документе обновлятора.
+
+[QA](integration_workflow.md) разделяет unit/netns/real-network проверки.
+Последний [отчёт](linux-repair-2026-10-12.md) — результат конкретного прогона.

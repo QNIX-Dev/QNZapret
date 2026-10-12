@@ -2,7 +2,8 @@ import 'package:flutter/services.dart';
 
 import 'proxy_runtime.dart';
 
-final class LinuxProxyRuntime implements ProxyRuntime {
+final class LinuxProxyRuntime
+    implements ProxyRuntime, TelegramProxySetupRuntime {
   const LinuxProxyRuntime({MethodChannel? channel, EventChannel? eventChannel})
     : _channel = channel ?? const MethodChannel(_methodChannelName),
       _eventChannel = eventChannel ?? const EventChannel(_eventChannelName);
@@ -47,5 +48,10 @@ final class LinuxProxyRuntime implements ProxyRuntime {
   @override
   Future<void> stop() {
     return _channel.invokeMethod<void>('stop');
+  }
+
+  @override
+  Future<void> setupTelegramProxy() {
+    return _channel.invokeMethod<void>('setupTelegram');
   }
 }

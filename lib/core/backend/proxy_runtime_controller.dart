@@ -146,6 +146,16 @@ final class ProxyRuntimeController extends ChangeNotifier {
     return result ?? false;
   }
 
+  Future<bool> setupTelegramProxy() async {
+    final target = runtime;
+    if (target is! TelegramProxySetupRuntime) return false;
+    return await _capture(() async {
+          await (target as TelegramProxySetupRuntime).setupTelegramProxy();
+          return true;
+        }) ??
+        false;
+  }
+
   Future<void> _refreshSnapshot() async {
     _snapshot = await runtime.getSnapshot();
   }

@@ -30,7 +30,7 @@ podman run --rm --security-opt label=disable \
     apt-get update >/dev/null
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates clang cmake git libgtk-3-dev liblzma-dev lld llvm \
-      ninja-build pkg-config >/dev/null
+      ninja-build pkg-config python3 >/dev/null
     export PATH=/opt/flutter/bin:$PATH
     mkdir -p /work/qnzapret
     tar -C /source --exclude=.dart_tool --exclude=.git --exclude=build \

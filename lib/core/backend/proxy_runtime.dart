@@ -770,6 +770,10 @@ class ProxyRuntimeSnapshot {
   }
 }
 
+abstract interface class TelegramProxySetupRuntime {
+  Future<void> setupTelegramProxy();
+}
+
 abstract interface class ProxyRuntime {
   ProxyPlatform get platform;
 

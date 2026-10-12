@@ -37,6 +37,8 @@ assert_line "MemoryDenyWriteExecute=no" "$runtime_unit"
 
 assert_line "StateDirectory=qnzapret" "$telegram_unit"
 assert_line "StateDirectoryMode=0700" "$telegram_unit"
+assert_line "PrivateUsers=no" "$telegram_unit"
+assert_absent "ProtectKernelModules=yes" "$telegram_unit"
 assert_absent "ReadWritePaths=" "$telegram_unit"
 assert_absent "ListenStream=" "$telegram_unit"
 grep -Fq 'TelegramStateDirectory()' "$sidecar_source"
@@ -68,7 +70,7 @@ grep -Fq '%systemd_user_postun_with_restart qnzapret-telegram.service' \
   "$repo_dir/packaging/linux/qnzapret.spec"
 grep -Fq 'systemctl --user --machine="${user}@" daemon-reload' \
   "$repo_dir/packaging/linux/scripts/postinst"
-assert_absent '"org.freedesktop.Application", "Open"' \
+grep -Fq '"org.freedesktop.Application", "Open"' \
   "$repo_dir/linux/runner/linux_proxy_runtime_plugin.cc"
 grep -Fq 'SOCK_STREAM | SOCK_CLOEXEC' \
   "$repo_dir/linux/runtime/telegram_sidecar.cc"

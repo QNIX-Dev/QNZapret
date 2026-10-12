@@ -82,6 +82,8 @@ class HomeScreen extends ConsumerWidget {
                                   child: _HeroDetails(
                                     runtimeView: runtimeView,
                                     centered: false,
+                                    onTelegramSetup:
+                                        controller.setupTelegramProxy,
                                     onPrimaryAction: () async {
                                       HapticFeedback.lightImpact();
                                       if (runtimeView.canStopCommand) {
@@ -114,6 +116,7 @@ class HomeScreen extends ConsumerWidget {
                           _HeroDetails(
                             runtimeView: runtimeView,
                             centered: true,
+                            onTelegramSetup: controller.setupTelegramProxy,
                             onPrimaryAction: () async {
                               HapticFeedback.lightImpact();
                               if (runtimeView.canStopCommand) {
@@ -184,11 +187,13 @@ class _HeroDetails extends StatelessWidget {
     required this.runtimeView,
     required this.centered,
     required this.onPrimaryAction,
+    required this.onTelegramSetup,
   });
 
   final RuntimeViewState runtimeView;
   final bool centered;
   final Future<void> Function() onPrimaryAction;
+  final Future<void> Function() onTelegramSetup;
 
   @override
   Widget build(BuildContext context) {
@@ -227,6 +232,23 @@ class _HeroDetails extends StatelessWidget {
                 : null,
           ),
         ),
+        if (runtimeView.snapshot.platform == ProxyPlatform.linux &&
+            runtimeView.snapshot.telegramSidecarState ==
+                TelegramSidecarState.running &&
+            !runtimeView.snapshot.telegramCompatibilityProxyReady) ...[
+          const SizedBox(height: AppSpacing.md),
+          OutlinedButton.icon(
+            onPressed: runtimeView.isBusy ? null : onTelegramSetup,
+            icon: const Icon(Icons.send_rounded),
+            label: const Text('Настроить Telegram'),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Подтвердите подключение прокси в окне Telegram. Вход в аккаунт не требуется.',
+            style: Theme.of(context).textTheme.bodySmall,
+            textAlign: centered ? TextAlign.center : TextAlign.start,
+          ),
+        ],
         if (message case final message?) ...[
           const SizedBox(height: AppSpacing.md),
           AnimatedSwitcher(

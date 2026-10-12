@@ -1,8 +1,7 @@
 [Unit]
 Description=QNZapret privileged NFQUEUE runtime
 Documentation=file:///usr/share/doc/qnzapret/linux_runtime_handoff.md
-After=dbus.service network-online.target
-Wants=network-online.target
+After=dbus.service network.target
 
 [Service]
 Type=dbus
@@ -15,7 +14,7 @@ RestartSec=2s
 RuntimeDirectory=qnzapret
 RuntimeDirectoryMode=0750
 StateDirectory=qnzapret
-StateDirectoryMode=0750
+StateDirectoryMode=0755
 UMask=0027
 User=root
 Group=root

@@ -4,25 +4,22 @@
     {
       "name": "zapret2",
       "upstream": "https://github.com/bol-van/zapret2",
-      "version": "v0.9.5.2",
-      "commit": "7a69d56a4b35f814fb2d42e7bddb2f21c2314ff9",
-      "releaseArchiveSha256": "4f8612fc617c9a1937ca215f85bb6d7005f5455e152a8f7f1dd666c38a080dc8",
+      "version": "v1.0.5.2",
+      "commit": "6b6c63e3385fa73f8af3be4a69171e947f5a319d",
+      "releaseArchiveSha256": "fb3bcf69e7d86b9fa2d60bd53c956ac06d9dcc3adf9392afd84865f1d94b1158",
       "artifact": "bin/nfqws2",
-      "artifactSha256": "31bb9f5ce03c6f5389d89ebcc3fdbb5db661b8679dd5f75d86da05d4bcfd27ed",
+      "artifactSha256": "de1414b1e0f9a5659d438cddcb0c7e9099b4533bf5c8a3cf841c7bc7e5aa1473",
       "license": "MIT"
     },
     {
       "name": "tg-ws-proxy",
       "upstream": "https://github.com/Flowseal/tg-ws-proxy",
-      "version": "v1.7.0",
-      "commit": "0eebdff69e7cdc2a2babe2de86e1f89a8cf35374",
+      "version": "v1.11.2",
+      "commit": "307a384ab7f522e34bb1a045884d0bd90f40bee5",
       "packagedSubset": "headless proxy Python package",
-      "localPatches": [
-        "secret-file input instead of command-line secret",
-        "redacted startup output",
-        "mode-0600 listener/upstream health marker"
-      ],
-      "license": "MIT"
+      "localPatches": [],
+      "license": "MIT",
+      "adapter": "qnzapret_telegram.py: separate secret-file, redaction and health adapter; upstream proxy/ unmodified"
     },
     {
       "name": "QNZapret strategy lists and payloads",

@@ -14,10 +14,12 @@ UMask=0077
 StateDirectory=qnzapret
 StateDirectoryMode=0700
 NoNewPrivileges=yes
+# Ubuntu AppArmor блокирует смену capabilities в user namespace.
+# ProtectKernelModules также нельзя применять здесь: он требует drop capabilities.
+PrivateUsers=no
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=read-only
-ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 LockPersonality=yes

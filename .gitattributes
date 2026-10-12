@@ -15,3 +15,7 @@ CMakeLists.txt text eol=lf
 
 *.bat text eol=crlf
 *.ps1 text eol=crlf
+
+# Upstream сохраняется побайтно для проверки Git blob/SHA256.
+runtime/telegram/flowseal/proxy/** whitespace=-blank-at-eol
+runtime/assets/qnzapret/lua/** whitespace=-blank-at-eol

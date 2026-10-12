@@ -1,30 +1,45 @@
-# Third-party notices
+# Сторонние компоненты QNZapret
+
+Состав поставки сверён 12 октября 2026 года. Точные версии, commits и SHA256
+находятся в `provenance.json`, целостность файлов — в `manifest.sha256`.
+Сторонние LICENSE сохранены в исходном виде.
 
 ## zapret2
 
-QNZapret packages the official Linux x86_64 `nfqws2` binary and the
-`zapret-lib.lua` / `zapret-antidpi.lua` libraries from `bol-van/zapret2`
-`v0.9.5.2`, commit `7a69d56a4b35f814fb2d42e7bddb2f21c2314ff9`.
-The component is distributed under the MIT license. The complete license text
-is stored in `third_party/zapret2-LICENSE.txt`.
+Поставляются официальный Linux x86_64 `nfqws2` и Lua-модули
+[bol-van/zapret2 v1.0.5.2](https://github.com/bol-van/zapret2/releases/tag/v1.0.5.2),
+commit `6b6c63e3385fa73f8af3be4a69171e947f5a319d`.
+Лицензия MIT: [полный текст](third_party/zapret2-LICENSE.txt).
+Основной профиль загружает zapret-lib/zapret-antidpi; остальные Lua-модули
+сохранены как часть upstream-поставки для совместимых поколений.
 
 ## tg-ws-proxy
 
-QNZapret packages only the headless `proxy` Python package from
-`Flowseal/tg-ws-proxy` `v1.7.0`, commit
-`0eebdff69e7cdc2a2babe2de86e1f89a8cf35374`. Tray and GUI modules are not
-packaged. The component is distributed under the MIT license. The complete
-license text is stored in `third_party/tg-ws-proxy-LICENSE.txt`.
+Linux поставляет только headless `proxy/*.py` из
+[Flowseal/tg-ws-proxy v1.11.2](https://github.com/Flowseal/tg-ws-proxy/releases/tag/v1.11.2),
+commit `307a384ab7f522e34bb1a045884d0bd90f40bee5`.
+Лицензия MIT: [полный текст](third_party/tg-ws-proxy-LICENSE.txt).
+Upstream Python-файлы не изменены; upstream GUI/tray/updater не поставляются.
+Отдельный `linux/components/qnzapret_telegram.py` читает secret-file,
+маскирует secret/setup URI и наблюдает health WS/H2 bridges.
+Автообновления Linux описаны в `docs/linux_component_updates.md` основного проекта.
 
-QNZapret carries a narrow hardening patch: the secret is read from a mode-0600
-file, startup output does not print the secret or setup URI, and readiness is
-written to a mode-0600 health marker.
+## Android TUN-to-SOCKS
 
-## Existing QNZapret strategy data
+Android NDK собирает vendored MIT `hev-socks5-tunnel` из
+`android/app/src/main/jni/hev-socks5-tunnel/`; его лицензия и лицензии вложенных
+зависимостей находятся рядом с исходниками. Kotlin lifecycle/strategy/MTProxy
+являются кодом QNZapret; GPL Android-обвязка reference fork не подключена.
+Обновление Linux Python core не обновляет Kotlin автоматически.
 
-The hostlists and binary payloads were introduced into the QNZapret repository
-by commit `de2051edc395086a0ef1515f28b8a6eec566a014`. The large general list was
-last updated by commit `4e9f15d15175aeee430de426a5e2dfca5ceba6f9`.
-Earlier Git history does not record an external URL or a separate license for
-these files. This limitation is stated explicitly instead of attributing them
-to an unverified source.
+## Старые strategy lists и payloads
+
+Hostlists/payloads появились в QNZapret commit
+`de2051edc395086a0ef1515f28b8a6eec566a014`; последняя зафиксированная исходная
+правка общего списка — `4e9f15d15175aeee430de426a5e2dfca5ceba6f9`.
+История не содержит исходного внешнего URL/отдельной лицензии этих файлов.
+Не приписывать им автоматически MIT-лицензию соседних компонентов; перед
+публичным распространением нужно уточнить provenance/права.
+
+Единая лицензия собственного кода QNZapret в корне пока не объявлена;
+эти уведомления не подменяют её и не лицензируют чужие материалы заново.

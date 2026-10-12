@@ -11,6 +11,10 @@ Requires:       nftables
 Requires:       polkit
 Requires:       python3
 Requires:       python3-cryptography
+Requires:       python3-certifi
+Requires:       python3-httpx
+Requires:       python3-h2
+Requires:       ca-certificates
 Requires:       systemd
 Requires(pre):  shadow-utils
 Requires(post): systemd
@@ -52,6 +56,7 @@ fi
 /usr/bin/qnzapret
 /usr/libexec/qnzapret-runtime
 /usr/libexec/qnzapret-telegram-sidecar
+/usr/libexec/qnzapret-component-updater.py
 /usr/lib/qnzapret
 /usr/lib/systemd/system/qnzapret-runtime.service
 /usr/lib/systemd/user/qnzapret-telegram.service

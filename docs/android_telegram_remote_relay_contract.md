@@ -1,11 +1,13 @@
-# Android Telegram Remote Relay Contract
+# Android Telegram: optional remote relay
 
 ## Статус
 
-Этот документ фиксирует production-дизайн remote relay/proxy маршрута для Telegram.
+Сверено с кодом ветки `quriee` 12 октября 2026 года.
+Документ описывает частично реализованный remote relay и оставшиеся планы.
 Текущий runtime-код уже реализует минимальный SOCKS5 remote relay path для TCP Telegram endpoints через `StrategyProfile.endpointPolicies`.
 После исследования `tg-ws-proxy` этот route считается не основным продуктовым решением "одной кнопкой", а диагностическим/enterprise fallback: он требует внешнего доверенного узла и поэтому не заменяет transparent Telegram transport внутри QNZapret.
-Основной research-документ по transparent tg-ws-proxy направлению: `docs/android_telegram_tg_ws_proxy_research.md`.
+Границы compatibility/transparent transport описаны в
+[архитектурном решении](android_telegram_tg_ws_proxy_research.md).
 
 Реализовано:
 
@@ -64,7 +66,7 @@ Telegram app
   -> StrategySocks5Server
   -> Telegram endpoint policy
   -> protected TCP socket to remote relay
-  -> remote SOCKS5 или HTTPS CONNECT relay
+  -> remote SOCKS5 relay (HTTPS CONNECT пока не реализован)
   -> original Telegram DC ip:port
 ```
 
@@ -135,7 +137,7 @@ cache/qnzapret/telegram_relay.json
 - `relay_protocol_error`: relay вернул некорректный SOCKS5/HTTP CONNECT ответ.
 - `relay_tls_failed`: зарезервировано для будущего HTTPS CONNECT с TLS.
 
-Для Telegram в РФ безопасный production default должен быть `failClosed`: если прямой TCP доказанно блокируется до payload, silent direct fallback будет выглядеть для пользователя как зависание Telegram и маскировать проблему.
+Для явно выбранной relay policy пример использует `failClosed`: если прямой TCP доказанно блокируется до payload, silent direct fallback будет выглядеть для пользователя как зависание Telegram и маскировать проблему.
 
 ## Логи
 
@@ -158,11 +160,14 @@ QNZapretProxy: telegram relay first byte originalTarget=... sinceRelayConnectMs=
 - Логи должны редактировать auth и не раскрывать relay credentials.
 - Relay является доверенной стороной для Telegram metadata: как минимум видит original target и timing.
 
-## Definition of Done для реализации relay
+## Критерии завершения relay (часть ещё не выполнена)
 
 - `StrategyProfile` и Dart/Kotlin codecs поддерживают endpoint policy без ломки старых профилей.
 - `StrategySocks5Server` выбирает relay route до direct connect для `endpointClass=telegram`.
 - SOCKS5 relay передает stream без ручной настройки proxy в Telegram.
 - Ошибки relay мапятся в стабильные log codes.
 - Direct pre-connect diagnostics остаются доступными для сравнения.
-- Device smoke должен подтвердить, что Telegram работает через VPN-перехват без настройки proxy в приложении Telegram.
+- Device smoke должен подтвердить работу выбранного remote relay через VPN
+без proxy mode Telegram. Такой smoke для текущего среза не заявляется.
+
+Основной следующий этап — [Android non-root](android_next_stage.md).
