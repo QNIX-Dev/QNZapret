@@ -1,0 +1,9 @@
+{
+  "upstream": "https://github.com/Flowseal/tg-ws-proxy",
+  "version": "v1.11.2",
+  "commit": "307a384ab7f522e34bb1a045884d0bd90f40bee5",
+  "upstreamPath": ".github/cfproxy-domains.txt",
+  "sha256": "fbc0cb7bad16083fd603b42ded73b775ec3f63a55616adee77bc8e6653b9940f",
+  "license": "MIT",
+  "purpose": "Android first-launch route fallback; runtime fetch/cache supersedes seed"
+}

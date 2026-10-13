@@ -136,13 +136,10 @@ tcp_recv_handler (void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err)
     HevSocks5SessionTCP *self = arg;
 
     if (p) {
-        if (!self->queue) {
-            self->queue = p;
-        } else {
-            if (self->queue->tot_len > TCP_WND_MAX (pcb))
-                return ERR_WOULDBLOCK;
+        if (self->queue)
             pbuf_cat (self->queue, p);
-        }
+        else
+            self->queue = p;
     } else {
         self->pcb_eof = 1;
     }
@@ -190,29 +187,6 @@ hev_socks5_session_tcp_new (struct tcp_pcb *pcb, HevTaskMutex *mutex)
     LOG_D ("%p socks5 session tcp new", self);
 
     return self;
-}
-
-static int
-hev_socks5_session_tcp_bind (HevSocks5 *self, int fd,
-                             const struct sockaddr *dest)
-{
-    HevConfigServer *srv;
-    unsigned int mark;
-
-    LOG_D ("%p socks5 session tcp bind", self);
-
-    srv = hev_config_get_socks5_server ();
-    mark = srv->mark;
-
-    if (mark) {
-        int res;
-
-        res = set_sock_mark (fd, mark);
-        if (res < 0)
-            return -1;
-    }
-
-    return 0;
 }
 
 static void
@@ -369,7 +343,7 @@ hev_socks5_session_tcp_class (void)
         okptr->iface = hev_socks5_session_tcp_iface;
 
         skptr = HEV_SOCKS5_CLASS (kptr);
-        skptr->binder = hev_socks5_session_tcp_bind;
+        skptr->binder = hev_socks5_session_bind;
 
         siptr = &kptr->session;
         siptr->splicer = hev_socks5_session_tcp_splice;

@@ -32,6 +32,11 @@ internal object HttpHostDetector {
 
 internal object TlsClientHelloDetector {
     fun detectSni(payload: ByteArray): String? {
+        val range = detectSniRange(payload) ?: return null
+        return String(payload, range.first, range.last - range.first + 1, StandardCharsets.US_ASCII)
+    }
+
+    fun detectSniRange(payload: ByteArray): IntRange? {
         if (payload.size < TLS_RECORD_HEADER_LENGTH + HANDSHAKE_HEADER_LENGTH) {
             return null
         }
@@ -83,7 +88,7 @@ internal object TlsClientHelloDetector {
         return null
     }
 
-    private fun parseServerName(payload: ByteArray, start: Int, end: Int): String? {
+    private fun parseServerName(payload: ByteArray, start: Int, end: Int): IntRange? {
         if (start + 2 > end) {
             return null
         }
@@ -98,8 +103,8 @@ internal object TlsClientHelloDetector {
                 return null
             }
 
-            if (nameType == HOST_NAME_TYPE) {
-                return String(payload, cursor, nameLength, StandardCharsets.US_ASCII)
+            if (nameType == HOST_NAME_TYPE && nameLength > 0) {
+                return cursor until cursor + nameLength
             }
 
             cursor += nameLength

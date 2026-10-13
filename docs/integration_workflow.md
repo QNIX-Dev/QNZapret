@@ -20,13 +20,16 @@ runtime-состояниями; backend — за контракты, проце�
 
 - Dart constraint: `^3.11.4`, зависимости — `pubspec.yaml`/`pubspec.lock`.
 - Последняя локальная проверка: Flutter 3.47.6 / Dart 3.13.5, Linux x86_64.
+- Android build требует Python 3 для generated hostlist indexes.
 - Android: Java/Kotlin target 17, Gradle 8.14, AGP 8.11.1, Kotlin 2.2.20;
   compile/target/min SDK и NDK берутся из Flutter tooling.
 - `android.builtInKotlin=false`, `android.newDsl=false` добавлены Flutter
   migrator для текущего Android build. Предупреждения о будущей поддержке
   Gradle/AGP/Kotlin не равны ошибке прошедшей сборки.
-- Android release пока подписывается debug key. Версии Android/UI (`0.0.1f`,
-  build 1) и Flutter/Linux (`0.0.6+6`) ещё не согласованы.
+- Android release пока подписывается debug key. Новый Android build берёт
+  versionName/versionCode из Flutter (`0.0.6+7`); UI использует package info.
+- Gradle ограничен 3 GiB heap, двумя workers; Kotlin компилируется in-process.
+  На 16 GiB хосте тяжёлые сборки и emulator smoke выполнять последовательно.
 - Linux build: clang/C++, CMake, Ninja, pkg-config, GTK3/GIO development
   packages и Python 3. Packaging требует `dpkg-deb` или fallback ar/tar и
   `rpmbuild`; скрипт сейчас собирает оба формата, а не только DEB.
@@ -56,6 +59,11 @@ flutter build appbundle --release
 # Для установки на устройство дополнительно:
 flutter build apk --release
 ```
+
+Для согласованной параллельной установки с несовместимой старой подписью:
+`cd android` и `./gradlew :app:assembleRelease -PqnzPreview=true`.
+Пакет `dev.qnzapret.preview` и настройки отделены от обычного приложения;
+старую версию/данные не удалять. JNI namespace сохраняется.
 
 PowerShell использует `.\gradlew.bat :app:testDebugUnitTest` из `android/`.
 `flutter run -d <DEVICE_ID>` требует ID из `flutter devices`; не предполагать,
@@ -113,6 +121,19 @@ text/media/voice/video/file upload, cooldown, pool, watchdog и Stop. Личны
 аккаунты и сообщения не используются автоматически как тестовые fixtures.
 Логи: `QNZapretService`, `QNZapretTun`, `QNZapretProxy`, `QNZapretNetTest`,
 `QNZapretTgCompat`; секреты и приватные домены не публиковать.
+
+Автоматические account-free сценарии только для отдельного эмулятора:
+
+```bash
+python3 test/integration/android_qs_vpn_regression.py --serial emulator-5554 --apk <APK>
+python3 test/integration/android_runtime_smoke.py --serial emulator-5554 --apk <APK>
+python3 test/integration/android_telegram_smoke.py --serial emulator-5554
+```
+
+Они отвергают физический телефон, меняют тестовые appops/QS и используют
+отдельный fixture APK. Проверяются competing VPN, JNI/TUN, UDP association
+isolation, HTTPS отдельного UID и Stop. Сеть хоста/его обход могут влиять на
+результат; это не независимое подтверждение DPI/media на смартфоне.
 
 ## Git и подмодуль
 

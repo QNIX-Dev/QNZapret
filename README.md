@@ -38,8 +38,8 @@ Flutter Home / Logs / Settings
 стратегию для `nfqws2`; полная эквивалентность Android socket-действий не заявляется.
 
 Интерфейс содержит управление сервисами, журнал событий, системную/светлую/тёмную
-тему и шесть палитр. Linux получает native-события; Android пока использует
-snapshot и локальные события контроллера, а подробную диагностику пишет в logcat.
+тему и шесть палитр. Linux и Android получают native snapshot/lifecycle events;
+подробную сетевую диагностику Android пишет в logcat.
 
 ## Telegram и обновления Linux
 
@@ -110,8 +110,8 @@ Android JVM: из `android/` выполнить `./gradlew :app:testDebugUnitTes
 
 [Оглавление документации](docs/README.md) содержит контракты, платформенные
 инструкции, известные ограничения и результаты последнего Linux-прогона.
-Версии сейчас расходятся: Flutter/Linux — `0.0.6+6`, Android и подпись в UI —
-`0.0.1f`, build `1`; это известный долг, а не единая версия релиза.
+Новый Android build использует Flutter version metadata (`0.0.6+7`);
+production signing ещё не настроен. Старые Android сборки имели `0.0.1f`, build 1.
 
 Лицензии сторонних компонентов и границы происхождения hostlists описаны в
 [уведомлениях](runtime/assets/qnzapret/THIRD_PARTY_NOTICES.md).

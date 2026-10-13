@@ -21,6 +21,11 @@ class MainActivity : FlutterActivity() {
         proxyRuntimeBridge = ProxyRuntimeBridge(this, flutterEngine)
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        if (::proxyRuntimeBridge.isInitialized) proxyRuntimeBridge.dispose()
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     @Deprecated("Uses Activity result API compatibility for the VPN prepare flow.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (::proxyRuntimeBridge.isInitialized &&

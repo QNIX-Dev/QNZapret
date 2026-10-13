@@ -13,6 +13,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.net.InetAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
@@ -216,6 +217,9 @@ internal object TelegramWebSocketTransport {
         directRouteCooldownUntilMs.clear()
         cfHostCooldownUntilMs.clear()
         routeScores.clear()
+        cdnValidationLocks.clear()
+        cdnValidatedUntilMs.clear()
+        mainReferenceKeys.clear()
         closePool()
     }
 
@@ -292,7 +296,11 @@ internal object TelegramWebSocketTransport {
 
             try {
                 val dnsStartedAtMs = SystemClock.elapsedRealtime()
-                val resolved = resolver.resolve(
+                val resolved = if (candidate.isDirectRoute && dcId in listOf(2, 4)) {
+                    // Same trusted redirect as upstream tg-ws-proxy; keep SNI/Host
+                    // and TLS verification tied to the Web endpoint, not this IP.
+                    listOf(TelegramResolvedAddress(InetAddress.getByName("149.154.167.220"), "telegram_redirect"))
+                } else resolver.resolve(
                     host = candidate.host,
                     network = network,
                     preferIpv4Only = preferIpv4Only,
@@ -326,6 +334,9 @@ internal object TelegramWebSocketTransport {
                 lastError = error
                 val errorCode = error.routeErrorCode()
                 scoreFor(candidate.host, mediaDc).recordFailure(errorCode)
+                if (errorCode == "cdn_wrong_dc") {
+                    cfHostCooldownUntilMs[candidate.host] = SystemClock.elapsedRealtime() + CDN_VALIDATION_TTL_MS
+                }
                 if (errorCode == "http_429") {
                     candidate.cfDomain?.let { domain ->
                         cfCooldownUntilMs[domain] = SystemClock.elapsedRealtime() + CF_COOLDOWN_MS
@@ -450,6 +461,7 @@ internal object TelegramWebSocketTransport {
         startedAtMs: Long,
         dnsMs: Long,
         strategyProxyEndpoint: LocalStrategyProxyEndpoint?,
+        validateCdn: Boolean = true,
     ): TelegramWebSocketConnection {
         var lastError: IOException? = null
         for ((ipIndex, address) in resolved.take(MAX_IPS_PER_HOST).withIndex()) {
@@ -503,6 +515,48 @@ internal object TelegramWebSocketTransport {
 
                 val openResult = TelegramWebSocketStream.open(sslSocket, candidate.host)
                 sslSocket.soTimeout = STREAM_READ_TIMEOUT_MS
+                if (validateCdn && dcId == 203 && candidate.cfDomain != null &&
+                    (cdnValidatedUntilMs[candidate.host] ?: 0L) <= SystemClock.elapsedRealtime()) {
+                    var probeConsumed = false
+                    synchronized(cdnValidationLocks.getOrPut(candidate.host) { Any() }) {
+                        if ((cdnValidatedUntilMs[candidate.host] ?: 0L) <= SystemClock.elapsedRealtime()) {
+                            if ((cfHostCooldownUntilMs[candidate.host] ?: 0L) > SystemClock.elapsedRealtime()) {
+                                throw IOException("CDN gateway validation is cooling down")
+                            }
+                            probeConsumed = true
+                            try {
+                                val cdnKeys = TelegramGatewayProbe.publicKeys(openResult.stream, 203)
+                                val base = candidate.cfDomain
+                                val cached = mainReferenceKeys[base]
+                                val mainKeys = if (cached != null && cached.second > SystemClock.elapsedRealtime()) cached.first else {
+                                    val master = candidate.copy(host = "kws2.$base", kind = "cloudflare_reference")
+                                    val masterAddresses = TelegramCloudflareResolver(service).resolve(master.host, network,
+                                        network != null && !UnderlyingNetworkSelector.supportsIpv6(service, network), DNS_TIMEOUT_MS)
+                                    val reference = connectCandidate(service, master, masterAddresses, network, tlsVerify,
+                                        timeoutMs, 2, false, startedAtMs, dnsMs, strategyProxyEndpoint, false)
+                                    try { TelegramGatewayProbe.publicKeys(reference.stream, 2) }
+                                    finally { reference.stream.close() }
+                                }
+                                val until = SystemClock.elapsedRealtime() + CDN_VALIDATION_TTL_MS
+                                mainReferenceKeys[base] = mainKeys to until
+                                TelegramGatewayProbe.requireCdnKeys(cdnKeys, mainKeys)
+                                cdnValidatedUntilMs[candidate.host] = until
+                                Log.d(LOG_TAG, "telegram CDN203 separate gateway keys confirmed host=${candidate.host}")
+                            } catch (error: IOException) {
+                                cfHostCooldownUntilMs[candidate.host] = SystemClock.elapsedRealtime() +
+                                    if (error is TelegramGatewayIdentityException) CDN_VALIDATION_TTL_MS else CF_COOLDOWN_MS
+                                throw error
+                            } finally { openResult.stream.close() }
+                        }
+                    }
+                    if (probeConsumed) {
+                        // Probes consume a separate cipher stream; actual traffic
+                        // always starts on a fresh connection. Concurrent callers
+                        // share the result without probing the same host again.
+                        return connectCandidate(service, candidate, resolved, network, tlsVerify, timeoutMs,
+                            dcId, mediaDc, startedAtMs, dnsMs, strategyProxyEndpoint, false)
+                    }
+                }
                 val connectedAtMs = SystemClock.elapsedRealtime()
                 val tcpConnectMs = tcpConnectedAtMs - tcpStartedAtMs
                 val tlsMs = tlsHandshakeAtMs - tcpConnectedAtMs
@@ -539,6 +593,7 @@ internal object TelegramWebSocketTransport {
             } catch (error: IOException) {
                 lastError = error
                 runCatching { rawSocket.close() }
+                if (error is TelegramGatewayIdentityException) throw error
                 Log.d(
                     LOG_TAG,
                     "telegram cf route ip failed dc=$dcId mediaDc=$mediaDc host=${candidate.host} route=${candidate.kind} " +
@@ -589,21 +644,25 @@ internal object TelegramWebSocketTransport {
         activeDomain: String?,
         nowMs: Long,
     ): List<TelegramWebSocketRouteCandidate> {
-        if (dcId !in 1..5) {
+        if (dcId !in 1..5 && dcId != 203) {
             throw IOException("Unsupported Telegram DC id $dcId")
         }
-        val directPrimary = TelegramWebSocketRouteCandidate("kws$dcId.web.telegram.org", "direct_kws", sourceTier = 2, variantRank = 0)
-        val directAlt = TelegramWebSocketRouteCandidate("kws$dcId-1.web.telegram.org", "direct_kws_alt", sourceTier = 2, variantRank = 0)
-        val directCandidates = if (mediaDc) {
+        val webDcId = dcId
+        val mediaRoute = mediaDc || dcId == 203
+        val directPrimary = TelegramWebSocketRouteCandidate("kws$webDcId.web.telegram.org", "direct_kws", sourceTier = 2, variantRank = 0)
+        val directAlt = TelegramWebSocketRouteCandidate("kws$webDcId-1.web.telegram.org", "direct_kws_alt", sourceTier = 2, variantRank = 0)
+        val directCandidates = if (dcId == 203) {
+            emptyList()
+        } else if (mediaDc) {
             listOf(
                 directAlt,
-                TelegramWebSocketRouteCandidate("${dcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2, variantRank = 1),
+                TelegramWebSocketRouteCandidate("${webDcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2, variantRank = 1),
                 directPrimary,
             )
         } else {
             listOf(
                 directPrimary,
-                TelegramWebSocketRouteCandidate("${dcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2, variantRank = 1),
+                TelegramWebSocketRouteCandidate("${webDcId.dcLegacyName}.web.telegram.org", "direct_legacy", sourceTier = 2, variantRank = 1),
                 directAlt.copy(variantRank = 2),
             )
         }
@@ -635,8 +694,8 @@ internal object TelegramWebSocketTransport {
                 active = domain == activeDomain,
             )
         }.filterAvailableHosts(nowMs).sortByRouteScore(mediaDc)
-        val cf = if (mediaDc) cfLocal + direct + cfPublic else cfLocal + cfPublic
-        return if (mediaDc) {
+        val cf = if (mediaRoute) cfLocal + direct + cfPublic else cfLocal + cfPublic
+        return if (mediaRoute) {
             if (routeConfig.cfPriority) cf else direct + cfLocal + cfPublic
         } else {
             if (routeConfig.cfPriority) cf + direct else direct + cf
@@ -740,16 +799,8 @@ internal object TelegramWebSocketTransport {
         success: Boolean,
         errorCode: String,
     ): TelegramRouteSessionOutcome {
-        val progressBytes = maxOf(bytesUp, bytesDown)
-        val lowThroughput = mediaDc && (
-            errorCode == "low_media_throughput" ||
-                (
-                    success &&
-                        durationMs >= MEDIA_LOW_THROUGHPUT_MIN_DURATION_MS &&
-                        progressBytes < MEDIA_LOW_THROUGHPUT_MIN_PROGRESS_BYTES &&
-                        progressBps(progressBytes, durationMs) < MEDIA_LOW_THROUGHPUT_PROGRESS_BPS
-                    )
-            )
+        // A small completed sticker followed by an idle connection is success.
+        val lowThroughput = mediaDc && errorCode == "low_media_throughput"
         return if (lowThroughput) {
             TelegramRouteSessionOutcome(
                 success = false,
@@ -765,12 +816,9 @@ internal object TelegramWebSocketTransport {
         }
     }
 
-    private fun progressBps(progressBytes: Long, durationMs: Long): Long {
-        return (progressBytes * 1000L) / durationMs.coerceAtLeast(1L)
-    }
-
     private fun IOException.routeErrorCode(): String {
         return when (this) {
+            is TelegramGatewayIdentityException -> "cdn_wrong_dc"
             is SocketTimeoutException -> "timeout"
             is TelegramWebSocketHttpException -> when (statusCode) {
                 429 -> "http_429"
@@ -919,13 +967,14 @@ internal object TelegramWebSocketTransport {
     private const val CONNECT_TIMEOUT_MS = 5_000
     private const val STREAM_READ_TIMEOUT_MS = 0
     private const val DNS_TIMEOUT_MS = 1_500
+    private const val CDN_VALIDATION_TTL_MS = 15 * 60 * 1000L
+    private val cdnValidationLocks = ConcurrentHashMap<String, Any>()
+    private val cdnValidatedUntilMs = ConcurrentHashMap<String, Long>()
+    private val mainReferenceKeys = ConcurrentHashMap<String, Pair<Set<Long>, Long>>()
     private const val MAX_IPS_PER_HOST = 2
     private const val CF_COOLDOWN_MS = 45_000L
     private const val UPLOAD_ACK_COOLDOWN_MS = 5 * 60 * 1000L
     private const val MEDIA_LOW_THROUGHPUT_COOLDOWN_MS = 60_000L
-    private const val MEDIA_LOW_THROUGHPUT_MIN_DURATION_MS = 10_000L
-    private const val MEDIA_LOW_THROUGHPUT_MIN_PROGRESS_BYTES = 128 * 1024L
-    private const val MEDIA_LOW_THROUGHPUT_PROGRESS_BPS = 8 * 1024L
     private const val DIRECT_ROUTE_COOLDOWN_MS = 60_000L
     private const val WS_POOL_SIZE_PER_KEY = 2
     private const val WS_POOL_MAX_TOTAL = 4
@@ -1053,47 +1102,11 @@ internal class TelegramWebSocketStream private constructor(
         writeFrame(opcode = OPCODE_PONG, payload = payload)
     }
 
-    fun readBinary(): ByteArray? {
-        while (true) {
-            val first = input.read()
-            if (first < 0) {
-                return null
-            }
-            val second = input.read()
-            if (second < 0) {
-                throw EOFException("Unexpected EOF in WebSocket header")
-            }
-            val opcode = first and 0x0f
-            val masked = (second and 0x80) != 0
-            var length = (second and 0x7f).toLong()
-            if (length == 126L) {
-                length = readUnsignedShort()
-            } else if (length == 127L) {
-                length = readLongLength()
-            }
-            if (length > MAX_FRAME_SIZE) {
-                throw IOException("Telegram WebSocket frame too large: $length")
-            }
-            val mask = if (masked) input.readBytesExact(4) else null
-            val payload = input.readBytesExact(length.toInt())
-            if (mask != null) {
-                for (index in payload.indices) {
-                    payload[index] = (payload[index].toInt() xor mask[index % 4].toInt()).toByte()
-                }
-            }
+    private val reader = TelegramWebSocketReader(input, ::writePong)
 
-            when (opcode) {
-                OPCODE_CONTINUATION, OPCODE_BINARY -> return payload
-                OPCODE_CLOSE -> return null
-                OPCODE_PING -> {
-                    writePong(payload)
-                    continue
-                }
-                OPCODE_PONG -> continue
-                else -> throw IOException("Unsupported Telegram WebSocket opcode $opcode")
-            }
-        }
-    }
+    fun setReadTimeout(millis: Int) { socket.soTimeout = millis }
+
+    fun readBinary(): ByteArray? = reader.readBinaryChunk()
 
     override fun close() {
         runCatching { socket.close() }
@@ -1129,27 +1142,6 @@ internal class TelegramWebSocketStream private constructor(
         output.write(header, 0, cursor)
         output.write(maskedPayload)
         output.flush()
-    }
-
-    private fun readUnsignedShort(): Long {
-        val first = input.read()
-        val second = input.read()
-        if (first < 0 || second < 0) {
-            throw EOFException("Unexpected EOF in WebSocket length")
-        }
-        return ((first shl 8) or second).toLong()
-    }
-
-    private fun readLongLength(): Long {
-        var result = 0L
-        repeat(8) {
-            val next = input.read()
-            if (next < 0) {
-                throw EOFException("Unexpected EOF in WebSocket length")
-            }
-            result = (result shl 8) or next.toLong()
-        }
-        return result
     }
 
     companion object {
@@ -1232,12 +1224,8 @@ internal class TelegramWebSocketStream private constructor(
 
         private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         private const val MAX_HEADER_SIZE = 16 * 1024
-        private const val MAX_FRAME_SIZE = 1024 * 1024
         private const val USER_AGENT =
             "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Mobile Safari/537.36"
-        private const val OPCODE_CONTINUATION = 0x0
-        private const val OPCODE_CLOSE = 0x8
-        private const val OPCODE_PING = 0x9
         private const val OPCODE_PONG = 0xa
         private const val OPCODE_BINARY = 0x2
         private const val WEBSOCKET_HEADER_MAX_SIZE = 14
@@ -1255,16 +1243,3 @@ private class TelegramWebSocketHttpException(
     val statusCode: Int,
     val statusLine: String,
 ) : IOException("Telegram WebSocket handshake failed: $statusLine")
-
-private fun InputStream.readBytesExact(length: Int): ByteArray {
-    val buffer = ByteArray(length)
-    var offset = 0
-    while (offset < length) {
-        val read = read(buffer, offset, length - offset)
-        if (read < 0) {
-            throw EOFException("Unexpected EOF")
-        }
-        offset += read
-    }
-    return buffer
-}

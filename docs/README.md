@@ -22,7 +22,10 @@
 
 ## Android
 
+- [Исправление Telegram media/CDN на Linux и Android](telegram-media-fix-2026-10-12.md).
+
 - [Следующий этап: обновление non-root и APK для смартфона](android_next_stage.md).
+- [Результаты обновления и проверки 12 октября](android-update-2026-10-12.md).
 
 - [Архитектура, состояние и smoke](android_runtime_handoff.md).
 - [Диагностика сети из UID приложения](android_uid_network_blocker.md).

@@ -187,6 +187,7 @@ internal object AndroidNetworkSelfTest {
         endpoint: InetSocketAddress,
         block: () -> Unit,
     ) {
+        if (Thread.currentThread().isInterrupted) return
         val startedAt = SystemClock.elapsedRealtime()
         try {
             block()

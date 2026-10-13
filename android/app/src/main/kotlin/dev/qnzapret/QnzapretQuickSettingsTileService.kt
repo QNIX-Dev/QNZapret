@@ -112,10 +112,10 @@ class QnzapretQuickSettingsTileService : TileService() {
         val tile = qsTile ?: return
         val snapshot = QnzapretVpnRuntimeStore.snapshot(this)
         val state = snapshot["state"] as? String ?: STATE_IDLE
-        val permissionGranted = snapshot["vpnPermissionGranted"] as? Boolean ?: (VpnService.prepare(this) == null)
+        val permissionGranted = snapshot["vpnPermissionGranted"] as? Boolean ?: false
         val serviceActive = snapshot["serviceActive"] as? Boolean ?: false
 
-        tile.label = "QNZapret"
+        tile.label = applicationInfo.loadLabel(packageManager)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             tile.subtitle = when {
                 !permissionGranted -> "Нужно разрешение"
@@ -127,7 +127,7 @@ class QnzapretQuickSettingsTileService : TileService() {
             }
         }
         tile.state = when {
-            state == STATE_FAILED -> Tile.STATE_UNAVAILABLE
+            state == STATE_FAILED -> Tile.STATE_INACTIVE
             serviceActive && state != STATE_STOPPING -> Tile.STATE_ACTIVE
             else -> Tile.STATE_INACTIVE
         }

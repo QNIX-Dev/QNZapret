@@ -2,16 +2,28 @@ import 'package:flutter/services.dart';
 
 import 'proxy_runtime.dart';
 
-final class AndroidProxyRuntime implements ProxyRuntime {
-  const AndroidProxyRuntime({MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel(_channelName);
+final class AndroidProxyRuntime
+    implements ProxyRuntime, TelegramProxySetupRuntime {
+  const AndroidProxyRuntime({
+    MethodChannel? channel,
+    EventChannel? eventChannel,
+  }) : _channel = channel ?? const MethodChannel(_channelName),
+       _eventChannel =
+           eventChannel ??
+           const EventChannel('dev.qnzapret/proxy_runtime/events');
 
   static const _channelName = 'dev.qnzapret/proxy_runtime';
 
   final MethodChannel _channel;
+  final EventChannel _eventChannel;
 
   @override
-  Stream<ProxyRuntimeEvent> get events => const Stream.empty();
+  Stream<ProxyRuntimeEvent> get events =>
+      _eventChannel.receiveBroadcastStream().map(
+        (event) => ProxyRuntimeEvent.fromMap(
+          (event as Map<Object?, Object?>?) ?? const <Object?, Object?>{},
+        ),
+      );
 
   @override
   ProxyPlatform get platform => ProxyPlatform.android;
@@ -39,4 +51,8 @@ final class AndroidProxyRuntime implements ProxyRuntime {
   Future<void> stop() {
     return _channel.invokeMethod<void>('stop');
   }
+
+  @override
+  Future<void> setupTelegramProxy() =>
+      _channel.invokeMethod<void>('setupTelegram');
 }

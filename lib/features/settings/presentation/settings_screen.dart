@@ -355,7 +355,7 @@ class _SettingsPanel extends StatelessWidget {
                                 label: 'Версия',
                                 value: packageInfo.when(
                                   data: (info) =>
-                                      '$appDisplayVersion (build ${info.buildNumber})',
+                                      '${info.version} (build ${info.buildNumber})',
                                   loading: () =>
                                       '$appDisplayVersion (build $appBuildNumber)',
                                   error: (error, stackTrace) =>
@@ -489,7 +489,7 @@ class _BrandHero extends StatelessWidget {
                   Text(
                     packageInfo.when(
                       data: (info) =>
-                          'Версия $appDisplayVersion • build ${info.buildNumber}',
+                          'Версия ${info.version} • build ${info.buildNumber}',
                       loading: () =>
                           'Версия $appDisplayVersion • build $appBuildNumber',
                       error: (error, stackTrace) =>

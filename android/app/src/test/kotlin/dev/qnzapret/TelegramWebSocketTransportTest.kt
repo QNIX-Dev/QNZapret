@@ -119,7 +119,7 @@ class TelegramWebSocketTransportTest {
     }
 
     @Test
-    fun lowThroughputMediaSessionIsScoredAsFailure() {
+    fun completedSmallStickerFollowedByIdleIsNotScoredAsFailure() {
         val outcome = TelegramWebSocketTransport.classifySessionResultForTest(
             mediaDc = true,
             bytesUp = 4_096,
@@ -129,9 +129,27 @@ class TelegramWebSocketTransportTest {
             errorCode = "client_closed",
         )
 
-        assertEquals(false, outcome.success)
-        assertEquals("low_media_throughput", outcome.errorCode)
-        assertEquals(true, outcome.lowThroughput)
+        assertEquals(true, outcome.success)
+        assertEquals("client_closed", outcome.errorCode)
+        assertEquals(false, outcome.lowThroughput)
+    }
+
+    @Test fun cdn203NeverUsesOrdinaryDc2WebEndpoint() {
+        val hosts = TelegramWebSocketTransport.routeHostsForTest(
+            dcId = 203, mediaDc = false, cfDomains = listOf("public.example"), localDomainCount = 0,
+        )
+        org.junit.Assert.assertTrue(hosts.contains("kws203.public.example"))
+        org.junit.Assert.assertFalse(hosts.contains("kws2.web.telegram.org"))
+        org.junit.Assert.assertFalse(hosts.contains("kws203.web.telegram.org"))
+        assertEquals("kws203.public.example", hosts.first())
+    }
+
+    @Test fun cdnMedia203KeepsItsDistinctGateway() {
+        val hosts = TelegramWebSocketTransport.routeHostsForTest(
+            dcId = 203, mediaDc = true, cfDomains = listOf("public.example"), localDomainCount = 0,
+        )
+        assertEquals("kws203.public.example", hosts.first())
+        org.junit.Assert.assertTrue(hosts.contains("kws203.public.example"))
     }
 
     @Test

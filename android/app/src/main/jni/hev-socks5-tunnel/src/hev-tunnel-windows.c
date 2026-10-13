@@ -44,13 +44,13 @@ hev_pbuf_free (struct pbuf *p)
 }
 
 int
-hev_tunnel_open (const char *name, int multi_queue)
+hev_tunnel_open (const char *name, int multi_queue, const char *guid)
 {
     wintun = hev_wintun_open ();
     if (!wintun)
         return -1;
 
-    adapter = hev_wintun_adapter_create (name);
+    adapter = hev_wintun_adapter_create (name, guid);
     if (!adapter)
         goto free;
 
@@ -136,7 +136,7 @@ hev_tunnel_get_index (void)
     if (index < 0)
         return NULL;
 
-    snprintf (tun_index, sizeof (tun_index) - 1, "%d", index);
+    snprintf (tun_index, sizeof (tun_index), "%d", index);
     return tun_index;
 }
 

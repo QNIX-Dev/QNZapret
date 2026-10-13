@@ -18,8 +18,10 @@
 #include "hev-config-const.h"
 
 static char tun_name[64];
-static unsigned int tun_mtu = 8500;
+static char tun_guid[64];
+static unsigned int tun_mtu;
 static int multi_queue;
+static int icmp;
 
 static char tun_ipv4_address[16];
 static char tun_ipv6_address[64];
@@ -38,15 +40,15 @@ static int mapdns_cache_size;
 static char log_file[1024];
 static char pid_file[1024];
 static int max_session_count;
-static int task_stack_size = 86016;
-static int tcp_buffer_size = 65536;
-static int udp_recv_buffer_size = 524288;
-static int udp_copy_buffer_nums = 10;
-static int connect_timeout = 10000;
-static int tcp_read_write_timeout = 300000;
-static int udp_read_write_timeout = 60000;
-static int limit_nofile = 65535;
-static int log_level = HEV_LOGGER_WARN;
+static int task_stack_size;
+static int tcp_buffer_size;
+static int udp_recv_buffer_size;
+static int udp_copy_buffer_nums;
+static int connect_timeout;
+static int tcp_read_write_timeout;
+static int udp_read_write_timeout;
+static int limit_nofile;
+static int log_level;
 
 static int
 hev_config_parse_tunnel_ipv4 (yaml_document_t *doc, yaml_node_t *base)
@@ -62,7 +64,7 @@ hev_config_parse_tunnel_ipv4 (yaml_document_t *doc, yaml_node_t *base)
         const char *key, *value;
 
         if (!pair->key || !pair->value)
-            break;
+            continue;
 
         node = yaml_document_get_node (doc, pair->key);
         if (!node || YAML_SCALAR_NODE != node->type)
@@ -95,7 +97,7 @@ hev_config_parse_tunnel_ipv6 (yaml_document_t *doc, yaml_node_t *base)
         const char *key, *value;
 
         if (!pair->key || !pair->value)
-            break;
+            continue;
 
         node = yaml_document_get_node (doc, pair->key);
         if (!node || YAML_SCALAR_NODE != node->type)
@@ -128,7 +130,7 @@ hev_config_parse_tunnel (yaml_document_t *doc, yaml_node_t *base)
         const char *key;
 
         if (!pair->key || !pair->value)
-            break;
+            continue;
 
         node = yaml_document_get_node (doc, pair->key);
         if (!node || YAML_SCALAR_NODE != node->type)
@@ -144,6 +146,8 @@ hev_config_parse_tunnel (yaml_document_t *doc, yaml_node_t *base)
 
             if (0 == strcmp (key, "name"))
                 strncpy (tun_name, value, 64 - 1);
+            else if (0 == strcmp (key, "guid"))
+                strncpy (tun_guid, value, 64 - 1);
             else if (0 == strcmp (key, "mtu"))
                 tun_mtu = strtoul (value, NULL, 10);
             else if (0 == strcmp (key, "multi-queue"))
@@ -152,10 +156,12 @@ hev_config_parse_tunnel (yaml_document_t *doc, yaml_node_t *base)
                 strncpy (tun_ipv4_address, value, 16 - 1);
             else if (0 == strcmp (key, "ipv6"))
                 strncpy (tun_ipv6_address, value, 64 - 1);
+            else if (0 == strcmp (key, "icmp"))
+                icmp = !strcasecmp (value, "reply");
             else if (0 == strcmp (key, "post-up-script"))
-                strncpy (tun_post_up_script, value, 64 - 1);
+                strncpy (tun_post_up_script, value, 1024 - 1);
             else if (0 == strcmp (key, "pre-down-script"))
-                strncpy (tun_pre_down_script, value, 64 - 1);
+                strncpy (tun_pre_down_script, value, 1024 - 1);
         } else {
             if (0 == strcmp (key, "ipv4"))
                 hev_config_parse_tunnel_ipv4 (doc, node);
@@ -181,6 +187,7 @@ hev_config_parse_socks5 (yaml_document_t *doc, yaml_node_t *base)
     const char *pass = NULL;
     const char *mark = NULL;
     const char *pipe = NULL;
+    const char *tfso = NULL;
 
     if (!base || YAML_MAPPING_NODE != base->type)
         return -1;
@@ -191,7 +198,7 @@ hev_config_parse_socks5 (yaml_document_t *doc, yaml_node_t *base)
         const char *key, *value;
 
         if (!pair->key || !pair->value)
-            break;
+            continue;
 
         node = yaml_document_get_node (doc, pair->key);
         if (!node || YAML_SCALAR_NODE != node->type)
@@ -219,6 +226,8 @@ hev_config_parse_socks5 (yaml_document_t *doc, yaml_node_t *base)
             pass = value;
         else if (0 == strcmp (key, "mark"))
             mark = value;
+        else if (0 == strcmp (key, "tcp-fastopen"))
+            tfso = value;
     }
 
     if (!port) {
@@ -258,6 +267,9 @@ hev_config_parse_socks5 (yaml_document_t *doc, yaml_node_t *base)
     if (mark)
         srv.mark = strtoul (mark, NULL, 0);
 
+    if (tfso)
+        srv.fastopen = (0 == strcasecmp (tfso, "true")) ? 1 : 0;
+
     return 0;
 }
 
@@ -275,7 +287,7 @@ hev_config_parse_mapdns (yaml_document_t *doc, yaml_node_t *base)
         const char *key, *value;
 
         if (!pair->key || !pair->value)
-            break;
+            continue;
 
         node = yaml_document_get_node (doc, pair->key);
         if (!node || YAML_SCALAR_NODE != node->type)
@@ -335,7 +347,7 @@ hev_config_parse_misc (yaml_document_t *doc, yaml_node_t *base)
         const char *key, *value;
 
         if (!pair->key || !pair->value)
-            break;
+            continue;
 
         node = yaml_document_get_node (doc, pair->key);
         if (!node || YAML_SCALAR_NODE != node->type)
@@ -407,7 +419,7 @@ hev_config_parse_doc (yaml_document_t *doc)
         int res = 0;
 
         if (!pair->key || !pair->value)
-            break;
+            continue;
 
         node = yaml_document_get_node (doc, pair->key);
         if (!node || YAML_SCALAR_NODE != node->type)
@@ -445,6 +457,41 @@ hev_config_parse_doc (yaml_document_t *doc)
     return 0;
 }
 
+static void
+hev_config_reset (void)
+{
+    memset (tun_ipv4_address, 0, sizeof (tun_ipv4_address));
+    memset (tun_ipv6_address, 0, sizeof (tun_ipv6_address));
+    memset (tun_post_up_script, 0, sizeof (tun_post_up_script));
+    memset (tun_pre_down_script, 0, sizeof (tun_pre_down_script));
+    memset (tun_name, 0, sizeof (tun_name));
+    memset (tun_guid, 0, sizeof (tun_guid));
+    memset (log_file, 0, sizeof (log_file));
+    memset (pid_file, 0, sizeof (pid_file));
+    memset (&srv, 0, sizeof (srv));
+
+    tun_mtu = 8500;
+    multi_queue = 0;
+    icmp = 0;
+
+    mapdns_address = 0;
+    mapdns_port = 0;
+    mapdns_network = 0;
+    mapdns_netmask = 0;
+    mapdns_cache_size = 0;
+
+    max_session_count = 0;
+    task_stack_size = 86016;
+    tcp_buffer_size = 65536;
+    udp_recv_buffer_size = 524288;
+    udp_copy_buffer_nums = 10;
+    connect_timeout = 10000;
+    tcp_read_write_timeout = 300000;
+    udp_read_write_timeout = 60000;
+    limit_nofile = 65535;
+    log_level = HEV_LOGGER_WARN;
+}
+
 int
 hev_config_init_from_file (const char *config_path)
 {
@@ -452,6 +499,8 @@ hev_config_init_from_file (const char *config_path)
     yaml_document_t doc;
     FILE *fp;
     int res = -1;
+
+    hev_config_reset ();
 
     if (!yaml_parser_initialize (&parser))
         goto exit;
@@ -487,6 +536,8 @@ hev_config_init_from_str (const unsigned char *config_str,
     yaml_document_t doc;
     int res = -1;
 
+    hev_config_reset ();
+
     if (!yaml_parser_initialize (&parser))
         goto exit;
 
@@ -505,11 +556,6 @@ exit:
     return res;
 }
 
-void
-hev_config_fini (void)
-{
-}
-
 const char *
 hev_config_get_tunnel_name (void)
 {
@@ -517,6 +563,15 @@ hev_config_get_tunnel_name (void)
         return NULL;
 
     return tun_name;
+}
+
+const char *
+hev_config_get_tunnel_guid (void)
+{
+    if (!tun_guid[0])
+        return NULL;
+
+    return tun_guid;
 }
 
 unsigned int
@@ -529,6 +584,12 @@ int
 hev_config_get_tunnel_multi_queue (void)
 {
     return multi_queue;
+}
+
+int
+hev_config_get_tunnel_icmp (void)
+{
+    return icmp;
 }
 
 const char *
@@ -670,7 +731,9 @@ const char *
 hev_config_get_misc_log_file (void)
 {
     if (!log_file[0])
-        return "stderr";
+        return NULL;
+    if (0 == strcmp (log_file, "null"))
+        return NULL;
 
     return log_file;
 }

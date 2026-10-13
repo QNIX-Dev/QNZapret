@@ -23,8 +23,9 @@ abstract interface class TelegramProxySetupRuntime {
 
 `ProxyPlatform`: `android`, `linux`, `windows`.
 `createDefaultProxyRuntime()` выбирает Android/Linux adapters; Windows — stub.
-Optional capability `TelegramProxySetupRuntime` реализует только Linux adapter.
-Android setup доступен через native flow/notification, а не через эту capability.
+Optional capability `TelegramProxySetupRuntime` реализована Android и Linux
+adapters. Android открывает user-initiated TelegramSetupActivity с сохранённым
+endpoint/secret; Linux доставляет URI через D-Bus/стандартный handler.
 
 UI работает через Riverpod `RuntimeController` и `ProxyRuntimeController`:
 initialize, prepare, start, stop, refresh, setupTelegramProxy. Контроллер
@@ -45,10 +46,13 @@ MethodChannel обеих платформ: `dev.qnzapret/proxy_runtime`.
 | `getSnapshot` | нет | map `ProxyRuntimeSnapshot` |
 | `start` | `{'config': config.toMap()}` | null / platform error |
 | `stop` | нет | null / platform error |
-| `setupTelegram` | нет; только Linux | null / `linux_telegram_setup_failed` |
+| `setupTelegram` | нет; Android/Linux | null / platform setup error |
 
 Android prepare запрашивает системное VPN consent. Linux prepare — read-only
-preflight; он не выдаёт разрешение Polkit. Linux `vpnPermissionGranted=true`
+preflight; он не выдаёт разрешение Polkit. Android snapshot читает **последний известный consent** из preferences, не
+вызывает VpnService.prepare: prepare может отозвать другой VPN. Реальное
+разрешение перепроверяется только при явном Prepare/Start. Revoke очищает cache.
+Linux `vpnPermissionGranted=true`
 не означает, что мутация уже авторизована: Polkit проверяется на Start/Stop.
 
 Android Start отвечает после отправки команды foreground service; дальнейшую
@@ -56,7 +60,7 @@ Android Start отвечает после отправки команды foregr
 и listener sidecar; открытие setup передаёт профиль Telegram, но подтверждение
 пользователем/живой bridge не являются условием завершения Start.
 
-Linux EventChannel: `dev.qnzapret/proxy_runtime/events`.
+Android и Linux EventChannel: `dev.qnzapret/proxy_runtime/events`.
 
 ```text
 snapshot: {type: snapshot, snapshot: <map>}
@@ -68,9 +72,9 @@ log: {type: log, log: {
 
 Dart `ProxyRuntimeEvent` содержит kind и nullable snapshot/log.
 Linux объединяет D-Bus события с кэшированными snapshot без вложенных RPC;
-Android и Windows adapters сейчас возвращают `Stream.empty()`.
-Application-журнал ограничен 240 событиями. Android logcat — отдельный
-диагностический источник, пока не подключённый к этому stream.
+Android публикует snapshot updates и lifecycle log events через тот же канал;
+Windows возвращает `Stream.empty()`. Application-журнал ограничен 240 событиями.
+Подробные сетевые Android logcat-события пока не транслируются целиком в UI.
 
 ## Launch config
 
@@ -115,8 +119,10 @@ Canonical lists/payloads находятся в `runtime/assets/qnzapret/`.
 Android APK asset paths остаются `qnzapret/lists/...` и `qnzapret/payloads/...`.
 
 Android использует `StrategyRuntimeEngine`: HTTP Host/TLS SNI, lazy exact/suffix
-hostlists, payload blobs, TLS record split, best-effort low-hop-limit fake и
-QUIC Initial. Корреляция DNS UDP/53/prior TCP не покрывает надёжно DoH/DoT.
+hostlists, payload blobs, TLS record split, UDP fake и QUIC Initial. TCP FAKE
+из переносимого профиля пропускается с `raw_injection_unavailable`: ordinary
+socket write не является безопасной raw injection и повреждает HTTP/TLS stream.
+Корреляция DNS UDP/53/prior TCP не покрывает надёжно DoH/DoT.
 Raw sequence/timestamp fooling и IP fragmentation этим no-root API не обещаются.
 
 Linux поддерживает только ограниченный compiler allowlist. Входные actions
@@ -140,7 +146,7 @@ no-auth/username-password и original IPv4/IPv6/domain target. HTTPS CONNECT
 | --- | --- |
 | platform/state/message | Платформа, lifecycle, сообщение пользователю |
 | backendConnected | Доступен platform bridge; не проверка внешнего интернета |
-| vpnPermissionGranted | Android consent; на Linux совместимое поле всегда true |
+| vpnPermissionGranted | Последний известный Android consent; на Linux совместимое поле всегда true |
 | serviceActive | Активен Android service / Linux transaction |
 | strategyEngineReady | Android engine/assets готовы; Linux worker/queue готовы |
 | trafficForwarderReady | Android TUN-to-SOCKS готов; Linux nft transaction применена |
@@ -163,18 +169,20 @@ Legacy Android payload без interception fields выводит mode/active и�
 Linux legacy queue/rules могут выводиться из engine/forwarder flags.
 Преобразование выполняет `ProxyRuntimeSnapshot.fromMap`, не widgets.
 
-### Различия Telegram, которые ещё нужно выровнять
+### Telegram readiness
 
-| Поле | Android сейчас | Linux сейчас |
-| --- | --- | --- |
-| ProxyReady | Локальный Kotlin listener готов | Есть живой MTProto+WS/H2 bridge |
-| SetupRequired | В текущем запуске нет успешного handshake+bridge для fingerprint | Listener есть, живого bridge сейчас нет |
-| SidecarState | Dart может вывести его из legacy flags | Явное состояние supervisor |
+На Android и Linux ProxyReady теперь требует живого MTProto+upstream bridge;
+SidecarState=running означает работающий listener. Android считает active
+bridges отдельно от клиентов в handshake; закрытие последнего bridge снимает
+успешный статус и публикует snapshot. SetupRequired на Android дополнительно
+учитывает fingerprint и подтверждение в текущем запуске, на Linux — наличие
+listener без живого bridge. UI: «Нужна настройка»/«Ожидает Telegram» до bridge,
+«Подключён» при bridge. Setup доступен и из UI, и через Android notification.
 
-Linux UI показывает «Нужна настройка»/«Ожидает Telegram» до bridge и
-«Подключён» при bridge. Общий UI сейчас доверяет ProxyReady, поэтому Android
-listener всё ещё может получить преждевременную успешную подпись. Это известное
-расхождение реализации, не обещание подтверждённого Android-соединения.
+Android Start выполняет runtime lifecycle в отдельном executor. Сетевой self-test
+запускается асинхронно после готовности (`runtime_ready`) и не задерживает Start.
+Generation guards предотвращают late running после Stop/revoke. Ошибка старта
+сохраняется при onDestroy; JNI isRunning проверяется также health monitor.
 
 ## Linux D-Bus и lifecycle
 
@@ -202,7 +210,8 @@ GUI/daemon остаются отзывчивыми при ожидании D-Bus
 
 ## Публичные ошибки
 
-Android: `vpn_prepare_in_progress`, `vpn_permission_required`, `vpn_start_failed`.
+Android: `vpn_prepare_in_progress`, `vpn_permission_required`, `vpn_start_failed`,
+`android_telegram_unavailable`, `android_telegram_setup_failed`.
 Linux: `linux_backend_unavailable`, `linux_backend_version_mismatch`,
 `linux_authorization_denied`, `linux_nft_unavailable`, `linux_nfqueue_unavailable`,
 `linux_queue_conflict`, `linux_profile_invalid`, `linux_profile_parse_rejected`,

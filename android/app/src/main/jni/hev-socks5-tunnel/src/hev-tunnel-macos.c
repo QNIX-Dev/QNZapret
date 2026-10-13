@@ -37,7 +37,7 @@
 static char tun_name[IFNAMSIZ];
 
 int
-hev_tunnel_open (const char *name, int multi_queue)
+hev_tunnel_open (const char *name, int multi_queue, const char *guid)
 {
 #if TARGET_OS_OSX
     socklen_t len = IFNAMSIZ;
@@ -240,7 +240,7 @@ hev_tunnel_get_index (void)
     unsigned int index;
 
     index = if_nametoindex (tun_name);
-    snprintf (tun_index, sizeof (tun_index) - 1, "%d", index);
+    snprintf (tun_index, sizeof (tun_index), "%d", index);
     return tun_index;
 }
 

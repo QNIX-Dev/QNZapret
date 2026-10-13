@@ -471,7 +471,7 @@ ip6_input_accept(struct netif *netif, const struct ip6_hdr *ip6hdr)
   /* interface is up? */
   if (netif_is_up(netif)) {
     u8_t i;
-    if (netif_is_flag_set(netif, NETIF_FLAG_PRETEND) && ((IP6H_NEXTH(ip6hdr) == IP6_NEXTH_TCP) || (IP6H_NEXTH(ip6hdr) == IP6_NEXTH_UDP))) {
+    if (netif_is_flag_set(netif, NETIF_FLAG_PRETEND)) {
       /* accept on this netif */
       return 1;
     }
@@ -1022,6 +1022,7 @@ netif_found:
         nexth = &IP6H_NEXTH(ip6hdr);
         hlen = hlen_tot = IP6_HLEN;
         pbuf_remove_header(p, IP6_HLEN);
+        continue;
 
 #else /* LWIP_IPV6_REASS */
         /* free (drop) packet pbufs */
@@ -1074,16 +1075,31 @@ options_done:
 #if LWIP_UDPLITE
     case IP6_NEXTH_UDPLITE:
 #endif /* LWIP_UDPLITE */
+      if (!netif_is_flag_set(inp, NETIF_FLAG_PRETEND_UDP) &&
+          netif_is_flag_set(inp, NETIF_FLAG_PRETEND)) {
+        pbuf_free(p);
+        break;
+      }
       udp_input(p, inp);
       break;
 #endif /* LWIP_UDP */
 #if LWIP_TCP
     case IP6_NEXTH_TCP:
+      if (!netif_is_flag_set(inp, NETIF_FLAG_PRETEND_TCP) &&
+          netif_is_flag_set(inp, NETIF_FLAG_PRETEND)) {
+        pbuf_free(p);
+        break;
+      }
       tcp_input(p, inp);
       break;
 #endif /* LWIP_TCP */
 #if LWIP_ICMP6
     case IP6_NEXTH_ICMP6:
+      if (!netif_is_flag_set(inp, NETIF_FLAG_PRETEND_ICMP) &&
+          netif_is_flag_set(inp, NETIF_FLAG_PRETEND)) {
+        pbuf_free(p);
+        break;
+      }
       icmp6_input(p, inp);
       break;
 #endif /* LWIP_ICMP */

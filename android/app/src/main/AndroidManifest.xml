@@ -7,7 +7,7 @@
         android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
-        android:label="QNZapret"
+        android:label="${qnzApplicationLabel}"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -56,7 +56,7 @@
         </service>
         <service
             android:name=".QnzapretQuickSettingsTileService"
-            android:label="QNZapret"
+            android:label="${qnzApplicationLabel}"
             android:icon="@mipmap/ic_launcher"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">
@@ -65,6 +65,9 @@
             </intent-filter>
             <meta-data
                 android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
                 android:value="true" />
         </service>
         <!-- Don't delete the meta-data below.

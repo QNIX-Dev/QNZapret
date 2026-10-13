@@ -9,6 +9,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -33,37 +35,50 @@ internal class TelegramRouteConfigProvider(
     private val onSnapshotUpdated: ((TelegramRouteConfigSnapshot) -> Unit)? = null,
 ) {
     private val refreshRunning = AtomicBoolean(false)
+    private val generation = AtomicLong(0)
+    @Volatile private var refreshThread: Thread? = null
 
     @Volatile
     private var currentSnapshot: TelegramRouteConfigSnapshot = missingSnapshot()
 
     @Synchronized
     fun loadAndProbeAsync(): TelegramRouteConfigSnapshot {
+        val epoch = generation.incrementAndGet()
+        refreshThread?.interrupt()
+        refreshRunning.set(false)
         val localConfig = loadLocalConfig()
-        val cachedPublicDomains = loadCachedPublicDomains()
+        val cachedPublicDomains = loadCachedPublicDomains().ifEmpty { loadBundledPublicDomains() }
         val initialSnapshot = buildInitialSnapshot(localConfig, cachedPublicDomains)
         currentSnapshot = initialSnapshot
         Log.d(LOG_TAG, "telegram route provider load source=signed count=0 status=placeholder")
-        startBackgroundRefresh()
+        startBackgroundRefresh(epoch)
         return initialSnapshot
     }
 
-    private fun startBackgroundRefresh() {
+    fun stop() {
+        generation.incrementAndGet()
+        refreshThread?.interrupt()
+        refreshRunning.set(false)
+    }
+
+    private fun startBackgroundRefresh(epoch: Long) {
         if (!refreshRunning.compareAndSet(false, true)) {
             return
         }
-        Thread(
+        refreshThread = Thread(
             {
                 try {
                     val localConfig = loadLocalConfig()
                     val publicDomains = loadPublicDomains()
+                    if (epoch != generation.get() || Thread.currentThread().isInterrupted) return@Thread
                     val probingSnapshot = buildInitialSnapshot(localConfig, publicDomains)
                     publish(probingSnapshot)
                     if (probingSnapshot.config.cfDomains.isEmpty()) {
                         Log.d(LOG_TAG, "telegram route provider load source=combined count=0 status=missing")
                         return@Thread
                     }
-                    val probe = probeDomains(probingSnapshot.config)
+                    val probe = probeDomains(probingSnapshot.config, epoch)
+                    if (epoch != generation.get() || Thread.currentThread().isInterrupted) return@Thread
                     val resultSnapshot = if (probe != null) {
                         probingSnapshot.copy(
                             status = TelegramRouteStatus.READY,
@@ -78,11 +93,11 @@ internal class TelegramRouteConfigProvider(
                     }
                     publish(resultSnapshot)
                 } finally {
-                    refreshRunning.set(false)
+                    if (epoch == generation.get()) refreshRunning.set(false)
                 }
             },
             "QNZapretTgRouteProvider",
-        ).apply { isDaemon = true }.start()
+        ).apply { isDaemon = true; start() }
     }
 
     private fun buildInitialSnapshot(
@@ -178,9 +193,16 @@ internal class TelegramRouteConfigProvider(
             return cache.domains
         }
 
-        Log.d(LOG_TAG, "telegram route provider load source=upstream count=0 fallback=local_only")
-        return emptyList()
+        return loadBundledPublicDomains()
     }
+
+    private fun loadBundledPublicDomains(): List<String> = runCatching {
+        service.assets.open(BUNDLED_DOMAINS_PATH).bufferedReader(Charsets.UTF_8).use { reader ->
+            TelegramRouteDomainCodec.decodeList(reader.readText())
+        }.also { domains ->
+            Log.d(LOG_TAG, "telegram route provider load source=bundled count=${domains.size}")
+        }
+    }.getOrElse { emptyList() }
 
     private fun loadCachedPublicDomains(): List<String> {
         val cache = readPublicCache() ?: return emptyList()
@@ -204,28 +226,22 @@ internal class TelegramRouteConfigProvider(
                 setRequestProperty("Accept", "text/plain")
             }
             connection.inputStream.use { input ->
-                val text = input.bufferedReader(Charsets.UTF_8).readText()
-                val encoded = text.lineSequence()
-                    .map { line -> line.trim() }
-                    .filter { line -> line.isNotEmpty() && !line.startsWith("#") }
-                    .toList()
-                val decoded = normalizeDomains(encoded.mapNotNull { value ->
-                    try {
-                        TelegramRouteDomainCodec.decodeFlowsealDomain(value)
-                    } catch (error: Exception) {
-                        Log.d(
-                            LOG_TAG,
-                            "telegram route provider decode failed value=$value " +
-                                "error=${error.javaClass.simpleName}:${error.message ?: "-"}",
-                        )
-                        null
-                    }
-                })
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(4096)
+                while (buffer.size() <= MAX_PUBLIC_BYTES) {
+                    val count = input.read(chunk, 0, minOf(chunk.size, MAX_PUBLIC_BYTES + 1 - buffer.size()))
+                    if (count < 0) break
+                    buffer.write(chunk, 0, count)
+                }
+                val bytes = buffer.toByteArray()
+                if (bytes.size > MAX_PUBLIC_BYTES) return emptyList()
+                val text = bytes.toString(Charsets.UTF_8)
+                val decoded = TelegramRouteDomainCodec.decodeList(text)
                 if (decoded.size < MIN_VALID_PUBLIC_DOMAINS) {
                     Log.d(
                         LOG_TAG,
                         "telegram route provider fetch ignored reason=low_quality " +
-                            "encoded=${encoded.size} domains=${decoded.size}",
+                            "domains=${decoded.size}",
                     )
                     return emptyList()
                 }
@@ -248,14 +264,14 @@ internal class TelegramRouteConfigProvider(
             return null
         }
         return try {
-            val json = JSONObject(file.readText())
+            val json = JSONObject(AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() })
             val fetchedAtMs = json.optLong("fetchedAtMs", 0L)
             val domains = normalizeDomains(json.optJSONArray("domains").toStringList())
             PublicDomainCache(
                 domains = domains,
                 fetchedAtMs = fetchedAtMs,
                 isFresh = fetchedAtMs > 0L &&
-                    System.currentTimeMillis() - fetchedAtMs <= PUBLIC_CACHE_TTL_MS,
+                    System.currentTimeMillis() - fetchedAtMs in 0..PUBLIC_CACHE_TTL_MS,
             )
         } catch (error: Exception) {
             Log.d(
@@ -275,7 +291,15 @@ internal class TelegramRouteConfigProvider(
                 .put("fetchedAtMs", System.currentTimeMillis())
                 .put("source", PUBLIC_DOMAINS_URL)
                 .put("domains", JSONArray(domains))
-            file.writeText(json.toString())
+            val atomic = AtomicFile(file)
+            val output = atomic.startWrite()
+            try {
+                output.write(json.toString().toByteArray(Charsets.UTF_8))
+                atomic.finishWrite(output)
+            } catch (error: Exception) {
+                atomic.failWrite(output)
+                throw error
+            }
         }.onFailure { error ->
             Log.d(
                 LOG_TAG,
@@ -285,10 +309,11 @@ internal class TelegramRouteConfigProvider(
         }
     }
 
-    private fun probeDomains(config: TelegramWebSocketRouteConfig): TelegramRouteProbeResult? {
+    private fun probeDomains(config: TelegramWebSocketRouteConfig, epoch: Long): TelegramRouteProbeResult? {
         val probeDomains = config.cfDomains.take(PROBE_DOMAIN_LIMIT)
         for (domain in probeDomains) {
             for (dcId in PROBE_DC_IDS) {
+                if (epoch != generation.get() || Thread.currentThread().isInterrupted) return null
                 val result = TelegramWebSocketTransport.probeCloudflareDomain(
                     service = service,
                     domain = domain,
@@ -363,6 +388,8 @@ internal class TelegramRouteConfigProvider(
     private companion object {
         private const val LOG_TAG = "QNZapretTgCompat"
         private const val ROUTE_CONFIG_PATH = "qnzapret/telegram_compat.json"
+        private const val BUNDLED_DOMAINS_PATH = "qnzapret/telegram/cfproxy-domains.txt"
+        private const val MAX_PUBLIC_BYTES = 64 * 1024
         private const val PUBLIC_CACHE_PATH = "qnzapret/telegram_cf_domains_cache.json"
         private const val PUBLIC_DOMAINS_URL =
             "https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt"
@@ -378,6 +405,10 @@ internal class TelegramRouteConfigProvider(
 }
 
 internal object TelegramRouteDomainCodec {
+    fun decodeList(text: String): List<String> = normalizeDomains(text.lineSequence()
+        .map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+        .map { decodeFlowsealDomain(it) }.toList())
+
     fun decodeFlowsealDomain(value: String): String {
         val trimmed = value.trim()
         if (!trimmed.endsWith(".com", ignoreCase = true)) {

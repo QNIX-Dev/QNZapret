@@ -8,18 +8,47 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.net.VpnService
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicInteger
 
 class QnzapretVpnService : VpnService() {
-    private var runtime: QnzapretAndroidRuntime? = null
+    private val operationGeneration = AtomicInteger(0)
+    private val runtimeLock = Any()
+    private val lifecycleExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "QNZapretLifecycle").apply { isDaemon = true }
+    }
+    private val diagnosticsExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "QNZapretDiagnostics").apply { isDaemon = true }
+    }
+    private var diagnosticTask: Future<*>? = null
+    @Volatile private var runtime: QnzapretAndroidRuntime? = null
     private var telegramCompatibilityProxy: TelegramCompatibilityProxyManager? = null
     private var lastConfig: VpnRuntimeConfig? = null
     private var lastProxyEndpoint: LocalStrategyProxyEndpoint? = null
+    private val healthHandler = Handler(Looper.getMainLooper())
+    private val healthCheck = object : Runnable {
+        override fun run() {
+            val snapshot = QnzapretVpnRuntimeStore.snapshot(this@QnzapretVpnService)
+            if (snapshot["state"] != "running") return
+            if (snapshot["tunnelActive"] == true &&
+                !runCatching { TProxyService.TProxyIsRunning() }.getOrDefault(false)) {
+                QnzapretVpnRuntimeStore.markFailed("Сервис передачи трафика завершился. Перезапустите обход.")
+                stopSelf()
+                return
+            }
+            healthHandler.postDelayed(this, 2000)
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_OPEN_TELEGRAM_PROXY) {
+            if (runtime == null) { stopSelf(startId); return START_NOT_STICKY }
             Log.d(LOG_TAG, "telegram setup action received")
             val telegramState = ensureTelegramCompatibilityProxyStarted()
             updateNotification(NotificationState.ACTIVE, lastConfig, telegramState)
@@ -30,6 +59,7 @@ class QnzapretVpnService : VpnService() {
         }
 
         if (intent?.action == ACTION_STOP) {
+            operationGeneration.incrementAndGet()
             Log.d(LOG_TAG, "stop action received")
             ensureNotificationChannel()
             QnzapretVpnRuntimeStore.markStopping("Останавливаем сервис обхода.")
@@ -40,6 +70,7 @@ class QnzapretVpnService : VpnService() {
         }
 
         if (VpnService.prepare(this) != null) {
+            VpnConsentStore.record(this, false)
             QnzapretVpnRuntimeStore.markFailed(
                 "Нет VPN-разрешения. Перед запуском нужно подготовить сервис.",
             )
@@ -47,6 +78,7 @@ class QnzapretVpnService : VpnService() {
             return START_NOT_STICKY
         }
 
+        VpnConsentStore.record(this, true)
         val isRestart = intent?.action == ACTION_RESTART
         val startOrigin = intent?.getStringExtra(EXTRA_START_ORIGIN) ?: START_ORIGIN_UNKNOWN
         val config = intent?.let(::readConfig) ?: lastConfig ?: VpnRuntimeConfig()
@@ -58,122 +90,153 @@ class QnzapretVpnService : VpnService() {
         ensureNotificationChannel()
         val notification = buildNotification(NotificationState.STARTING, config, telegramCompatibilityProxy?.currentState())
         startServiceInForeground(notification)
-        AndroidNetworkSelfTest.run(this, "pre_vpn_start")
-        runtime?.stop()
-        telegramCompatibilityProxy?.stop()
-        lastProxyEndpoint = null
-        val startResult = try {
-            QnzapretAndroidRuntime(this).also { runtime = it }.start(config)
-        } catch (error: Exception) {
-            Log.d(
-                LOG_TAG,
-                "runtime start failed ${error.javaClass.simpleName}:${error.message ?: "-"}",
-            )
-            runtime?.stop()
-            runtime = null
-            QnzapretVpnRuntimeStore.markFailed(
-                "Не удалось запустить сервис обхода: ${error.message ?: error.javaClass.simpleName}.",
-            )
-            updateNotification(NotificationState.ERROR, config, telegramCompatibilityProxy?.currentState())
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        lastProxyEndpoint = startResult.proxyEndpoint
-        val initialTelegramState = ensureTelegramCompatibilityProxyStarted()
-        val telegramState =
-            if (startOrigin == START_ORIGIN_UI &&
-                initialTelegramState.ready &&
-                initialTelegramState.setupRequired &&
-                telegramCompatibilityProxy.orCreate().shouldAutoOpenSetup(initialTelegramState)
-            ) {
-                telegramCompatibilityProxy.orCreate().openSetupScreen(initialTelegramState)
-                telegramCompatibilityProxy.orCreate().currentState()
-            } else {
-                initialTelegramState
+        val generation = operationGeneration.incrementAndGet()
+        lifecycleExecutor.execute {
+            if (generation != operationGeneration.get()) return@execute
+            synchronized(runtimeLock) {
+                runtime?.stop()
+                telegramCompatibilityProxy?.stop()
+                lastProxyEndpoint = null
             }
-        AndroidNetworkSelfTest.run(this, "post_tun_start")
-
-        val runtimeMessage = buildString {
-            append("Ядро обхода активно.")
-            append(" Профиль: ${startResult.plan.profileName} (${startResult.plan.ruleCount} правил).")
-            append(" Остальной трафик: ${startResult.plan.unmatchedTrafficPolicy.wireValue}.")
-            append(" Локальный proxy: ${startResult.proxyEndpoint.host}:${startResult.proxyEndpoint.port}.")
-            append(
-                " Данные стратегии: ${startResult.proxyStatus.hostlistCount} списков, " +
-                    "${startResult.proxyStatus.blobCount} payload-файлов.",
-            )
-            append(
-                " Протоколы: ${
-                    startResult.proxyStatus.supportedProtocols
-                        .map { it.wireValue }
-                        .sorted()
-                        .joinToString()
-                }.",
-            )
-            append(" TCP-порты: ${startResult.plan.tcpPorts.sorted().joinToString()}.")
-            append(" UDP-порты: ${startResult.plan.udpPorts.sorted().joinToString()}.")
-            append(
-                " Передача: IPv4 codec=${startResult.tunState.packetCodecReady}, " +
-                    "IPv6 codec=${startResult.tunState.ipv6PacketCodecReady}, " +
-                    "UDP=${startResult.tunState.udpForwarderReady}, " +
-                    "IPv6 UDP=${startResult.tunState.ipv6UdpForwarderReady}, " +
-                    "TCP=${startResult.tunState.tcpForwarderReady}.",
-            )
-            if (startResult.plan.requiredBlobKeys.isNotEmpty()) {
-                append(" Payload-файлы: ${startResult.plan.requiredBlobKeys.sorted().joinToString()}.")
-            }
-            if (startResult.assetReport.isComplete) {
-                append(" Данные проверены: ${startResult.assetReport.presentCount}.")
-            } else {
-                append(
-                    " Не найдены данные: ${startResult.assetReport.missingPaths.sorted().joinToString()}.",
+            val startResult = try {
+                synchronized(runtimeLock) {
+                    if (generation != operationGeneration.get()) return@execute
+                    QnzapretAndroidRuntime(this).also { runtime = it }.start(config)
+                }
+            } catch (error: Exception) {
+                if (generation != operationGeneration.get()) return@execute
+                Log.d(
+                    LOG_TAG,
+                    "runtime start failed ${error.javaClass.simpleName}:${error.message ?: "-"}",
                 )
+                runtime?.stop()
+                runtime = null
+                QnzapretVpnRuntimeStore.markFailed(
+                    "Не удалось запустить сервис обхода: ${error.message ?: error.javaClass.simpleName}.",
+                )
+                updateNotification(NotificationState.ERROR, config, telegramCompatibilityProxy?.currentState())
+                stopSelf()
+                return@execute
             }
-            append(" ${startResult.tunState.message}")
-            append(" Telegram proxy: ${telegramState.message}")
-            if (telegramState.setupRequired) {
-                append(" Нужно подключить Telegram к локальному proxy.")
+            val initialTelegramState = synchronized(runtimeLock) {
+                if (generation != operationGeneration.get()) return@execute
+                lastProxyEndpoint = startResult.proxyEndpoint
+                ensureTelegramCompatibilityProxyStarted()
+            }
+            val telegramState =
+                if (startOrigin == START_ORIGIN_UI &&
+                    initialTelegramState.ready &&
+                    initialTelegramState.setupRequired &&
+                    telegramCompatibilityProxy.orCreate().shouldAutoOpenSetup(initialTelegramState)
+                ) {
+                    telegramCompatibilityProxy.orCreate().openSetupScreen(initialTelegramState)
+                    telegramCompatibilityProxy.orCreate().currentState()
+                } else {
+                    initialTelegramState
+                }
+
+            if (generation != operationGeneration.get()) return@execute
+            val currentTelegramState = telegramCompatibilityProxy?.currentState() ?: telegramState
+            val runtimeMessage = buildString {
+                append("Ядро обхода активно.")
+                append(" Профиль: ${startResult.plan.profileName} (${startResult.plan.ruleCount} правил).")
+                append(" Остальной трафик: ${startResult.plan.unmatchedTrafficPolicy.wireValue}.")
+                append(" Локальный proxy: ${startResult.proxyEndpoint.host}:${startResult.proxyEndpoint.port}.")
+                append(
+                    " Данные стратегии: ${startResult.proxyStatus.hostlistCount} списков, " +
+                        "${startResult.proxyStatus.blobCount} payload-файлов.",
+                )
+                append(
+                    " Протоколы: ${
+                        startResult.proxyStatus.supportedProtocols
+                            .map { it.wireValue }
+                            .sorted()
+                            .joinToString()
+                    }.",
+                )
+                append(" TCP-порты: ${startResult.plan.tcpPorts.sorted().joinToString()}.")
+                append(" UDP-порты: ${startResult.plan.udpPorts.sorted().joinToString()}.")
+                append(
+                    " Передача: IPv4 codec=${startResult.tunState.packetCodecReady}, " +
+                        "IPv6 codec=${startResult.tunState.ipv6PacketCodecReady}, " +
+                        "UDP=${startResult.tunState.udpForwarderReady}, " +
+                        "IPv6 UDP=${startResult.tunState.ipv6UdpForwarderReady}, " +
+                        "TCP=${startResult.tunState.tcpForwarderReady}.",
+                )
+                if (startResult.plan.requiredBlobKeys.isNotEmpty()) {
+                    append(" Payload-файлы: ${startResult.plan.requiredBlobKeys.sorted().joinToString()}.")
+                }
+                if (startResult.assetReport.isComplete) {
+                    append(" Данные проверены: ${startResult.assetReport.presentCount}.")
+                } else {
+                    append(
+                        " Не найдены данные: ${startResult.assetReport.missingPaths.sorted().joinToString()}.",
+                    )
+                }
+                append(" ${startResult.tunState.message}")
+                append(" Telegram proxy: ${currentTelegramState.message}")
+                if (currentTelegramState.setupRequired) {
+                    append(" Нужно подключить Telegram к локальному proxy.")
+                }
+            }
+
+            synchronized(runtimeLock) {
+                if (generation != operationGeneration.get()) return@execute
+                QnzapretVpnRuntimeStore.markRunning(
+                    newMessage = runtimeMessage,
+                    newStrategyEngineReady = startResult.proxyStatus.engineReady,
+                    newTrafficForwarderReady = startResult.tunState.forwarderReady,
+                    newTunnelActive = startResult.tunState.active,
+                    newPacketCodecReady = startResult.tunState.packetCodecReady,
+                    newUdpForwarderReady = startResult.tunState.udpForwarderReady,
+                    newIpv6PacketCodecReady = startResult.tunState.ipv6PacketCodecReady,
+                    newIpv6UdpForwarderReady = startResult.tunState.ipv6UdpForwarderReady,
+                    newTcpForwarderReady = startResult.tunState.tcpForwarderReady,
+                    newActiveProfileName = startResult.plan.profileName,
+                    newTelegramCompatibilityProxyReady = currentTelegramState.bridgeReady,
+                    newTelegramCompatibilitySetupRequired = currentTelegramState.setupRequired,
+                    newTelegramCompatibilityProxyEndpoint = currentTelegramState.endpoint,
+                    newTelegramCompatibilityProxyMessage = currentTelegramState.message,
+                    newTelegramSidecarState = if (currentTelegramState.ready) "running" else "failed",
+                )
+                healthHandler.removeCallbacks(healthCheck)
+                healthHandler.postDelayed(healthCheck, 2000)
+                updateNotification(NotificationState.ACTIVE, config, currentTelegramState)
+                diagnosticTask?.cancel(true)
+                diagnosticTask = diagnosticsExecutor.submit {
+                    AndroidNetworkSelfTest.run(this, "runtime_ready")
+                }
             }
         }
-
-        QnzapretVpnRuntimeStore.markRunning(
-            newMessage = runtimeMessage,
-            newStrategyEngineReady = startResult.proxyStatus.engineReady,
-            newTrafficForwarderReady = startResult.tunState.forwarderReady,
-            newTunnelActive = startResult.tunState.active,
-            newPacketCodecReady = startResult.tunState.packetCodecReady,
-            newUdpForwarderReady = startResult.tunState.udpForwarderReady,
-            newIpv6PacketCodecReady = startResult.tunState.ipv6PacketCodecReady,
-            newIpv6UdpForwarderReady = startResult.tunState.ipv6UdpForwarderReady,
-            newTcpForwarderReady = startResult.tunState.tcpForwarderReady,
-            newActiveProfileName = startResult.plan.profileName,
-            newTelegramCompatibilityProxyReady = telegramState.ready,
-            newTelegramCompatibilitySetupRequired = telegramState.setupRequired,
-            newTelegramCompatibilityProxyEndpoint = telegramState.endpoint,
-            newTelegramCompatibilityProxyMessage = telegramState.message,
-        )
-        updateNotification(NotificationState.ACTIVE, config, telegramState)
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
+        operationGeneration.incrementAndGet()
+        lifecycleExecutor.shutdownNow()
+        diagnosticsExecutor.shutdownNow()
         stopRuntime("Сервис обхода остановлен. Система готова к следующему запуску.")
         super.onDestroy()
     }
 
     override fun onRevoke() {
+        operationGeneration.incrementAndGet()
+        VpnConsentStore.record(this, false)
         stopRuntime("Система отозвала VPN-разрешение. Перед новым запуском нужно разрешить VPN снова.")
         stopSelf()
         super.onRevoke()
     }
 
-    private fun stopRuntime(message: String) {
+    private fun stopRuntime(message: String) = synchronized(runtimeLock) {
+        healthHandler.removeCallbacks(healthCheck)
+        diagnosticTask?.cancel(true)
+        val failed = QnzapretVpnRuntimeStore.snapshot(this)["state"] == "failed"
         runtime?.stop()
         runtime = null
         lastProxyEndpoint = null
         telegramCompatibilityProxy?.stop()
         telegramCompatibilityProxy = null
-        QnzapretVpnRuntimeStore.markIdle(this, message)
+        if (!failed) QnzapretVpnRuntimeStore.markIdle(this, message)
     }
 
     private fun ensureNotificationChannel() {
@@ -310,7 +373,7 @@ class QnzapretVpnService : VpnService() {
             service = this@QnzapretVpnService,
             strategyProxyProvider = { lastProxyEndpoint },
         ) { state ->
-            updateNotification(NotificationState.ACTIVE, lastConfig, state)
+            if (runtime != null) updateNotification(NotificationState.ACTIVE, lastConfig, state)
         }
         telegramCompatibilityProxy = created
         return created

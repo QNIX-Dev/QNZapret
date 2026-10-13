@@ -5,7 +5,8 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val nativeAbis = setOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+// Separate package for safe device testing when the original signing key is unavailable.
+val previewInstall = providers.gradleProperty("qnzPreview").orNull == "true"
 
 android {
     namespace = "dev.qnzapret"
@@ -22,18 +23,15 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "dev.qnzapret"
+        applicationId = if (previewInstall) "dev.qnzapret.preview" else "dev.qnzapret"
+        manifestPlaceholders["qnzApplicationLabel"] = if (previewInstall) "QNZapret Preview" else "QNZapret"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
-        versionCode = 1
-        versionName = "0.0.1f"
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
 
-        ndk {
-            abiFilters.addAll(nativeAbis)
-        }
     }
 
     buildTypes {
@@ -48,6 +46,7 @@ android {
         getByName("main") {
             jniLibs.srcDir(layout.buildDirectory.dir("generated/ndkLibs"))
             assets.srcDir(file("../../runtime/assets"))
+            assets.srcDir(layout.buildDirectory.dir("generated/compactHostlists"))
         }
     }
 }
@@ -74,9 +73,22 @@ tasks.register<Exec>("runNdkBuild") {
         "NDK_LIBS_OUT=${layout.buildDirectory.dir("generated/ndkLibs").get().asFile.absolutePath}",
         "APP_BUILD_SCRIPT=${file("src/main/jni/Android.mk").absolutePath}",
         "NDK_APPLICATION_MK=${file("src/main/jni/Application.mk").absolutePath}",
+        "REV_ID=d9dca26",
     )
 }
 
 tasks.named("preBuild") {
     dependsOn("runNdkBuild")
 }
+
+tasks.register<Exec>("generateHostlistIndexes") {
+    val source = file("../../runtime/assets/qnzapret/lists")
+    val output = layout.buildDirectory.dir("generated/compactHostlists")
+    inputs.dir(source)
+    inputs.file(file("../../packaging/android/build_hostlist_indexes.py"))
+    outputs.dir(output)
+    executable = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) "python" else "python3"
+    args(file("../../packaging/android/build_hostlist_indexes.py").absolutePath,
+        "--source-dir", source.absolutePath, "--output-dir", output.get().asFile.absolutePath)
+}
+tasks.named("preBuild") { dependsOn("generateHostlistIndexes") }

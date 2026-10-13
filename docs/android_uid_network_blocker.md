@@ -17,7 +17,8 @@ protected/bound connect; текущий телефон нужно провери
 
 ## Порядок проверки
 
-1. Получить `QNZapretNetTest` на `pre_vpn_start` и `post_tun_start`.
+1. Получить `QNZapretNetTest` на стадии `runtime_ready` (асинхронно после старта); для A/B отдельно
+   зафиксировать доступность без VPN и с ним.
 2. Сравнить plain TCP, protected socket, selected-network socket factory,
    protect+bind+connect и protected/bound UDP DNS.
 3. Проверить выбранную сеть, INTERNET/validation/unrestricted/non-VPN,

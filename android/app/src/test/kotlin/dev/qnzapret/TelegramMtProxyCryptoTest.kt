@@ -6,6 +6,18 @@ import org.junit.Test
 import java.security.MessageDigest
 
 class TelegramMtProxyCryptoTest {
+    @Test fun cdnInitPreservesLogical203AndMediaSign() {
+        for (media in listOf(false, true)) {
+            val upstream = TelegramMtProxyCrypto.createUpstream(
+                TelegramMtProxyTransportProtocol.PADDED_INTERMEDIATE, 203, media,
+            )
+            val cipher = TelegramCtrCipher.create(upstream.initPayload.copyOfRange(8, 40),
+                upstream.initPayload.copyOfRange(40, 56))
+            val plain = cipher.transform(upstream.initPayload)
+            val raw = ((plain[60].toInt() and 255) or (plain[61].toInt() shl 8)).toShort().toInt()
+            assertEquals(if (media) -203 else 203, raw)
+        }
+    }
     @Test
     fun acceptsDdSecretHandshakeAndContinuesClientCipher() {
         val secretHex = "00112233445566778899aabbccddeeff"

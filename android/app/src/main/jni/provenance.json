@@ -1,0 +1,18 @@
+{
+  "upstream": "https://github.com/heiher/hev-socks5-tunnel",
+  "version": "2.18.0",
+  "commit": "d9dca26c7ad0e494492244f0309e80ee583e739e",
+  "license": "MIT",
+  "submodules": {
+    "src/core": "162dd996299fc2d2bff2dd63728f8a2cd71ed31a",
+    "third-part/hev-task-system": "328f35d903221b51811b3d02b277d665dfbdc75f",
+    "third-part/lwip": "e22c9d2873cd5a8aade9deb2e518b75dab05170e",
+    "third-part/yaml": "efa36117a8646d26d12b58e05bac472d7854a70d"
+  },
+  "localIntegration": [
+    "Unmodified upstream sources; source trees flattened, .git excluded",
+    "Application.mk APP_MODULES selects shared library only",
+    "PKGNAME=dev/qnzapret; Kotlin JNI bool/isRunning contract",
+    "Gradle ndk-build REV_ID=d9dca26"
+  ]
+}

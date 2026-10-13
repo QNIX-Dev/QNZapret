@@ -2,11 +2,7 @@ package dev.qnzapret
 
 import android.net.Network
 import android.net.VpnService
-import android.os.ParcelFileDescriptor
 import android.os.SystemClock
-import android.system.ErrnoException
-import android.system.Os
-import android.system.OsConstants
 import android.util.Log
 import java.io.Closeable
 import java.io.EOFException
@@ -28,6 +24,7 @@ import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal class StrategySocks5Server(
@@ -43,7 +40,8 @@ internal class StrategySocks5Server(
     private val quicHostCorrelation = QuicHostCorrelation()
     private lateinit var executor: ExecutorService
     private var serverSocket: ServerSocket? = null
-    private var udpRelay: UdpRelay? = null
+    private val udpRelays = ConcurrentHashMap.newKeySet<UdpRelay>()
+    private val udpAssociationPermits = Semaphore(64)
 
     fun start(): LocalStrategyProxyEndpoint {
         if (!running.compareAndSet(false, true)) {
@@ -62,10 +60,7 @@ internal class StrategySocks5Server(
             host = host,
             port = nextServerSocket.localPort,
         )
-        val nextUdpRelay = UdpRelay(actualEndpoint.host).also { it.start() }
-
         serverSocket = nextServerSocket
-        udpRelay = nextUdpRelay
         closeables += nextServerSocket
         Log.d(LOG_TAG, "socks5 strategy proxy listening ${actualEndpoint.host}:${actualEndpoint.port}")
 
@@ -80,8 +75,8 @@ internal class StrategySocks5Server(
 
         closeables.forEach(::closeQuietly)
         closeables.clear()
-        udpRelay?.stop()
-        udpRelay = null
+        udpRelays.forEach { it.stop() }
+        udpRelays.clear()
         serverSocket = null
         if (::executor.isInitialized) {
             executor.shutdownNow()
@@ -717,12 +712,21 @@ internal class StrategySocks5Server(
                     )
                 }
                 val writes = if (strategyEvaluated) {
-                    listOf(TcpWrite(payload = payload))
+                    listOf(payload)
                 } else {
                     strategyEvaluated = true
                     transformTcpPayload(payload, target)
                 }
-                writes.forEach { write -> writeTcpPayload(upstreamSocket, output, target, write) }
+                writes.forEachIndexed { index, chunk ->
+                    if (index > 0) {
+                        if (!running.get()) throw SocketException("SOCKS5 strategy proxy is stopping")
+                        // TCP_NODELAY plus a short gap lets separate writes leave
+                        // as separate segments even for short mobile ClientHellos.
+                        Thread.sleep(10)
+                    }
+                    output.write(chunk)
+                    output.flush()
+                }
                 output.flush()
             }
         } catch (_: SocketException) {
@@ -740,7 +744,7 @@ internal class StrategySocks5Server(
         }
     }
 
-    private fun transformTcpPayload(payload: ByteArray, target: SocksTarget): List<TcpWrite> {
+    private fun transformTcpPayload(payload: ByteArray, target: SocksTarget): List<ByteArray> {
         val decisionStartedAtMs = SystemClock.elapsedRealtime()
         val decision = engine.evaluate(
             StrategyFlowProbe(
@@ -761,133 +765,55 @@ internal class StrategySocks5Server(
             quicHostCorrelation.rememberHost(address, decision.host)
         }
         if (decision.kind != StrategyDecisionKind.DESYNC) {
-            return listOf(TcpWrite(payload = payload))
-        }
-
-        val writes = mutableListOf<TcpWrite>()
-        decision.actions
-            .filter { action -> action.kind == StrategyActionKind.FAKE }
-            .forEach { action ->
-                val fakePayload = action.blobPayload ?: return@forEach
-                repeat(action.repeats.coerceAtLeast(1)) {
-                    writes += TcpWrite(payload = fakePayload, fake = true)
-                }
+            if (decision.protocol == StrategyProtocol.TLS && NonRootTcpTransform.isTelegramWebTls(decision.host)) {
+                Log.d(LOG_TAG, "telegram web TLS split target=${target.format()}")
+                return NonRootTcpTransform.apply(payload, StrategyProtocol.TLS,
+                    listOf(ResolvedStrategyAction(StrategyActionKind.SPLIT, 1, 1, null, null)))
             }
-
-        var chunks = listOf(payload)
-        decision.actions.forEach { action ->
-            if (action.kind == StrategyActionKind.SPLIT) {
-                chunks = splitTcpChunks(
-                    chunks = chunks,
-                    position = action.position ?: DEFAULT_TCP_SPLIT_POSITION,
-                    protocol = decision.protocol,
-                )
-            }
-        }
-        writes += chunks.map { chunk -> TcpWrite(payload = chunk) }
-        return writes
-    }
-
-    private fun writeTcpPayload(
-        socket: Socket,
-        output: OutputStream,
-        target: SocksTarget,
-        write: TcpWrite,
-    ) {
-        if (!write.fake) {
-            output.write(write.payload)
-            return
+            return listOf(payload)
         }
 
-        if (writeFakeToRemote(socket, output, target, write.payload)) {
-            return
+        if (decision.actions.any { it.kind == StrategyActionKind.FAKE }) {
+            // Normal TCP writes consume sequence space and are retransmitted. TTL
+            // does not turn them into out-of-band DPI fakes: it corrupts TLS/HTTP.
+            Log.d(LOG_TAG, "socks tcp fake skipped target=${target.format()} reason=raw_injection_unavailable")
         }
-        Log.d(LOG_TAG, "socks tcp fake skipped target=${target.format()} reason=ttl_unavailable")
-    }
-
-    private fun writeFakeToRemote(
-        socket: Socket,
-        output: OutputStream,
-        target: SocksTarget,
-        payload: ByteArray,
-    ): Boolean {
-        val pfd = try {
-            ParcelFileDescriptor.fromSocket(socket).dup()
-        } catch (error: Exception) {
-            Log.d(
-                LOG_TAG,
-                "socks tcp fake fd failed target=${target.format()} " +
-                    "error=${error.javaClass.simpleName}:${error.message ?: "-"}",
-            )
-            return false
+        val chunks = NonRootTcpTransform.apply(payload, decision.protocol, decision.actions)
+        if (chunks.sumOf { it.size } != payload.size) {
+            Log.d(LOG_TAG, "socks tls record split bytes=${payload.size}->${chunks.sumOf { it.size }}")
         }
-
-        try {
-            val option = hopLimitSocketOption(socket.inetAddress)
-            Os.setsockoptInt(pfd.fileDescriptor, option.level, option.option, DEFAULT_TCP_FAKE_HOP_LIMIT)
-            output.write(payload)
-            output.flush()
-            Log.d(
-                LOG_TAG,
-                "socks tcp fake sent target=${target.format()} ttl=$DEFAULT_TCP_FAKE_HOP_LIMIT " +
-                    "bytes=${payload.size}",
-            )
-            restoreDefaultHopLimit(pfd, option)
-            return true
-        } catch (error: ErrnoException) {
-            Log.d(
-                LOG_TAG,
-                "socks tcp fake ttl failed target=${target.format()} " +
-                    "error=${error.javaClass.simpleName}:${error.message ?: "-"}",
-            )
-            return false
-        } finally {
-            restoreDefaultHopLimit(pfd, hopLimitSocketOption(socket.inetAddress))
-            closeQuietly(pfd)
-        }
-    }
-
-    private fun splitTcpChunks(
-        chunks: List<ByteArray>,
-        position: Int,
-        protocol: StrategyProtocol?,
-    ): List<ByteArray> {
-        return chunks.flatMap { chunk ->
-            if (protocol == StrategyProtocol.TLS) {
-                val transformed = TlsRecordSplitTransform.splitFirstHandshakeRecord(chunk, position)
-                if (transformed != null) {
-                    Log.d(LOG_TAG, "socks tls record split bytes=${chunk.size}->${transformed.size}")
-                    return@flatMap listOf(transformed)
-                }
-            }
-
-            splitStreamChunk(chunk, position)
-        }
-    }
-
-    private fun splitStreamChunk(chunk: ByteArray, position: Int): List<ByteArray> {
-        if (position <= 0 || position >= chunk.size) {
-            return listOf(chunk)
-        }
-        return listOf(
-            chunk.copyOfRange(0, position),
-            chunk.copyOfRange(position, chunk.size),
-        )
+        return chunks
     }
 
     private fun handleUdpAssociate(
         client: Socket,
         output: OutputStream,
     ) {
-        val relay = udpRelay ?: throw IOException("UDP relay is not running")
-        writeReply(output, SOCKS_REPLY_SUCCEEDED, relay.bindAddress, relay.port)
+        if (!udpAssociationPermits.tryAcquire()) {
+            writeReply(output, SOCKS_REPLY_GENERAL_FAILURE, null, 0)
+            return
+        }
+        var relay: UdpRelay? = null
         try {
+            // Отдельный upstream socket и loopback endpoint на каждый TCP association.
+            // Иначе параллельные DNS/QUIC к одному target перезаписывают получателя.
+            val nextRelay = UdpRelay(host)
+            relay = nextRelay
+            nextRelay.start()
+            udpRelays.add(nextRelay)
+            if (!running.get()) return
+            writeReply(output, SOCKS_REPLY_SUCCEEDED, nextRelay.bindAddress, nextRelay.port)
             val input = client.getInputStream()
             while (running.get() && input.read() >= 0) {
-                // The TCP control channel defines UDP association lifetime.
+                // TCP control channel defines this association lifetime.
             }
         } catch (_: SocketException) {
         } finally {
+            relay?.let {
+                udpRelays.remove(it)
+                it.stop()
+            }
+            udpAssociationPermits.release()
             closeQuietly(client)
         }
     }
@@ -1320,21 +1246,6 @@ internal class StrategySocks5Server(
         }
     }
 
-    private fun restoreDefaultHopLimit(pfd: ParcelFileDescriptor, option: HopLimitOption) {
-        try {
-            Os.setsockoptInt(pfd.fileDescriptor, option.level, option.option, DEFAULT_TCP_HOP_LIMIT)
-        } catch (_: ErrnoException) {
-        }
-    }
-
-    private fun hopLimitSocketOption(address: InetAddress?): HopLimitOption {
-        return if (address is Inet6Address) {
-            HopLimitOption(OsConstants.IPPROTO_IPV6, OsConstants.IPV6_UNICAST_HOPS)
-        } else {
-            HopLimitOption(OsConstants.IPPROTO_IP, OsConstants.IP_TTL)
-        }
-    }
-
     private fun closeQuietly(closeable: Closeable) {
         try {
             closeable.close()
@@ -1678,16 +1589,6 @@ internal class StrategySocks5Server(
         }
     }
 
-    private data class TcpWrite(
-        val payload: ByteArray,
-        val fake: Boolean = false,
-    )
-
-    private data class HopLimitOption(
-        val level: Int,
-        val option: Int,
-    )
-
     private companion object {
         private const val LOG_TAG = "QNZapretProxy"
         private const val SOCKS_VERSION = 0x05
@@ -1698,6 +1599,7 @@ internal class StrategySocks5Server(
         private const val SOCKS_ATYP_DOMAIN = 0x03
         private const val SOCKS_ATYP_IPV6 = 0x04
         private const val SOCKS_REPLY_SUCCEEDED = 0x00
+        private const val SOCKS_REPLY_GENERAL_FAILURE = 0x01
         private const val SOCKS_REPLY_HOST_UNREACHABLE = 0x04
         private const val SOCKS_REPLY_COMMAND_NOT_SUPPORTED = 0x07
         private const val BYTE_MASK = 0xff
@@ -1706,6 +1608,7 @@ internal class StrategySocks5Server(
         private const val PORT_BYTES = 2
         private const val SOCKS_UDP_HEADER_MIN_LENGTH = 10
         private const val TCP_BUFFER_SIZE = 16 * 1024
+        private const val DEFAULT_TCP_SPLIT_POSITION = 1
         private const val UDP_BUFFER_SIZE = 64 * 1024
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val TELEGRAM_CONNECT_TIMEOUT_MS = 1_500
@@ -1718,9 +1621,6 @@ internal class StrategySocks5Server(
         private const val MTPROTO_OBFUSCATED_INIT_BYTES = 64
         private const val UDP_SOCKET_TIMEOUT_MS = 1_000
         private const val UDP_THROUGHPUT_WINDOW_MS = 1_000L
-        private const val DEFAULT_TCP_SPLIT_POSITION = 1
-        private const val DEFAULT_TCP_FAKE_HOP_LIMIT = 8
-        private const val DEFAULT_TCP_HOP_LIMIT = 64
         private const val DNS_PORT = 53
         private const val QUIC_HTTPS_PORT = 443
         private const val TELEGRAM_MTPROTO_PORT = 5222

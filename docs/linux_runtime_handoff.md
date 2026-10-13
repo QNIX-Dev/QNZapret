@@ -104,11 +104,28 @@ systemctl --user stop qnzapret-telegram.service
 ## Telegram sidecar
 
 Headless `Flowseal/tg-ws-proxy` слушает `127.0.0.1:1443` без upstream tray/GUI.
+Адаптер задаёт direct WS redirects DC2/DC4 на `149.154.167.220`.
+CDN203 не направляется на обычный DC2: `telegram_cdn.py` выбирает отдельный
+CF gateway после nonce-matched req_pq и сравнения публичных CDN/master key sets.
+Проверка не выполняет вход/создание аккаунта; действительную аутентификацию
+CDN keys выполняет сам Telegram. Результат кэшируется 15 минут. Непроверенные
+CDN gateways не используются; при отсутствии подходящего остаётся upstream
+direct TCP fallback. Реальные данные идут по новому соединению после probe.
+Медиа pool miss ждёт уже выполняющееся пополнение не более секунды перед
+публичным fallback; отмена клиента не отменяет общий refill.
 Отдельный адаптер читает `telegram.secret` из user state, маскирует secret/URI
 и наблюдает WS/H2 bridge. Secret/health — 0600, state directory — 0700.
 Systemd `STATE_DIRECTORY` имеет приоритет; fallback —
 `${XDG_STATE_HOME:-~/.local/state}/qnzapret`. Лог — rotating `telegram.log`,
 2 MiB + один backup.
+
+Опциональный `telegram.transport.json` рядом с secret содержит только
+`{"h2Media": false}` или `true`: переключает upstream H2 media fallback для
+сравнения сетей. Без файла сохраняется upstream default (H2 включён). Файл
+ограничен 4 KiB; неверная схема не останавливает proxy и не печатает содержимое.
+После изменения нужен Retry sidecar. Это локальная настройка QNZapret, а не
+глобальное изменение сети. Результаты текущего исправления —
+[в media-отчёте](telegram-media-fix-2026-10-12.md).
 
 Listener отражает `telegramSidecarState=running`; только живой bridge даёт
 `telegramCompatibilityProxyReady=true`. При закрытии последнего bridge marker

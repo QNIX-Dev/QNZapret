@@ -42,7 +42,7 @@ qndocs/                        separate Git submodule: branch regulations/prompt
 | Зона | Ответственность |
 | --- | --- |
 | `proxy_runtime.dart` | DTO, strategy profile, events, `ProxyRuntime`, optional `TelegramProxySetupRuntime`, stub |
-| `android_proxy_runtime.dart` | Android MethodChannel; event stream пока пуст |
+| `android_proxy_runtime.dart` | Android MethodChannel/EventChannel; snapshots и lifecycle logs |
 | `linux_proxy_runtime.dart` | Linux MethodChannel/EventChannel и команда настройки Telegram |
 | `proxy_runtime_controller.dart` | busy/error, snapshot, initialize/prepare/start/stop/refresh/setup |
 | `runtime_controller.dart` | Riverpod, UI-команды, статусы, журнал на 240 записей |
@@ -64,13 +64,15 @@ native events. Settings использует системную тему по у
 | `QnzapretVpnService`, `QnzapretVpnRuntimeStore`, `VpnRuntimeConfig` | Foreground lifecycle, state, config |
 | `QnzapretAndroidRuntime`, `LocalStrategyProxy`, `StrategySocks5Server` | Strategy runtime и protected SOCKS5 relay |
 | `StrategyProfile`, `StrategyRuntimePlan`, `StrategyRuntimeEngine` | Codec, plan, L7 decisions |
-| `StrategyAssetStore`, `StrategyAssetVerifier`, `HostlistMatcher`, `L7Detectors` | Assets и detection |
+| `StrategyAssetStore`, `StrategyAssetVerifier`, `HostlistMatcher`, `CompactHostlistIndex`, `L7Detectors` | Assets, memory-mapped exact index и detection |
 | `TunTransport`, `TProxyService`, `UnderlyingNetworkSelector` | TUN, JNI, исходящая сеть/DNS/IPv6 |
 | `TlsRecordSplitTransform`, `QuicHostCorrelation` | TLS split, DNS/prior-TCP correlation |
 | `TelegramCompatibilityProxyManager`, `TelegramMtProxyCrypto`, `TelegramSetupHealth`, `TelegramSetupActivity` | MTProxy, setup и notification action |
 | `TelegramWebSocketTransport`, `TelegramRouteConfigProvider`, `TelegramCloudflareResolver` | WSS routes, cache, scoring, pool, DNS |
+| `TelegramWebSocketReader`, `TelegramPendingResponse` | Потоковое чтение больших WS frames и watchdog без ложных idle timeout |
+| `TelegramGatewayProbe` | Анонимная проверка публичных key sets CDN/master без входа и без изменения auth клиента |
 | `Socks5RelayClient`, `StrategyProfileDevOverrides` | Optional remote relay и локальный smoke config |
-| `AndroidNetworkSelfTest` | Диагностика из UID приложения до/после TUN |
+| `AndroidNetworkSelfTest` | Фоновая диагностика из UID приложения после runtime ready |
 | `QnzapretQuickSettingsTileService` | Native QS start/stop |
 
 `IpPacketCodec` и `TcpRelayState` сохраняются с unit-тестами, но активный TUN
@@ -91,6 +93,8 @@ registrants и временные build-каталоги вручную не р�
 - `components/component_updater.py`: проверенная загрузка двух upstream.
 - `components/qnzapret_telegram.py`: secret-file, redaction, WS/H2 health
   отдельно от unmodified `runtime/telegram/flowseal/proxy/`.
+- `components/telegram_cdn.py`: выбор отдельного CDN203 gateway по публичным
+  nonce-matched replies; не выполняет аутентификацию за клиента.
 
 CMake собирает GUI, два supervisor executable и native tests; CTest также
 запускает Python tests. Packaging размещает bundle в `/opt/qnzapret`, helpers
@@ -107,3 +111,7 @@ CMake собирает GUI, два supervisor executable и native tests; CTest 
 - `android/app/src/test/`: Kotlin/JVM codec, relay, transport и health tests.
 - `runtime/assets/qnzapret/provenance.json`, `manifest.sha256`: происхождение
   и целостность поставки; сторонние LICENSE не переписываются.
+
+`packaging/android/build_hostlist_indexes.py` генерирует compact hostlist assets
+в build/app/generated/compactHostlists; они не являются второй ручной копией
+canonical списков. SHA256 manifest связывает generated index и source list.

@@ -232,8 +232,7 @@ class _HeroDetails extends StatelessWidget {
                 : null,
           ),
         ),
-        if (runtimeView.snapshot.platform == ProxyPlatform.linux &&
-            runtimeView.snapshot.telegramSidecarState ==
+        if (runtimeView.snapshot.telegramSidecarState ==
                 TelegramSidecarState.running &&
             !runtimeView.snapshot.telegramCompatibilityProxyReady) ...[
           const SizedBox(height: AppSpacing.md),

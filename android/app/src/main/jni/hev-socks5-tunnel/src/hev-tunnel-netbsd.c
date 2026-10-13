@@ -30,7 +30,7 @@
 static char tun_name[IFNAMSIZ];
 
 int
-hev_tunnel_open (const char *name, int multi_queue)
+hev_tunnel_open (const char *name, int multi_queue, const char *guid)
 {
     char buf[256];
     int one = 1;
@@ -43,6 +43,10 @@ hev_tunnel_open (const char *name, int multi_queue)
         goto fail;
 
     res = ioctl (fd, FIONBIO, (char *)&one);
+    if (res < 0)
+        goto fail_close;
+
+    res = ioctl (fd, TUNSIFHEAD, &one);
     if (res < 0)
         goto fail_close;
 
@@ -206,7 +210,7 @@ hev_tunnel_get_index (void)
     unsigned int index;
 
     index = if_nametoindex (tun_name);
-    snprintf (tun_index, sizeof (tun_index) - 1, "%d", index);
+    snprintf (tun_index, sizeof (tun_index), "%d", index);
     return tun_index;
 }
 

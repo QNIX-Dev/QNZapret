@@ -99,7 +99,10 @@ internal class TunTransport(
         val nextConfigFile = writeTun2SocksConfig(config, proxyEndpoint)
         configFile = nextConfigFile
         try {
-            TProxyService.TProxyStartService(nextConfigFile.absolutePath, nextDescriptor.fd)
+            check(TProxyService.TProxyStartService(nextConfigFile.absolutePath, nextDescriptor.fd)) {
+                "hev-socks5-tunnel отказал в запуске"
+            }
+            check(TProxyService.TProxyIsRunning()) { "hev-socks5-tunnel уже завершился" }
         } catch (error: Exception) {
             descriptor = null
             configFile = null

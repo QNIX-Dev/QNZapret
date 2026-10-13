@@ -52,7 +52,7 @@ internal class TelegramSetupActivity : Activity() {
             Log.d(
                 LOG_TAG,
                 "telegram setup open failed scheme=$scheme " +
-                    "error=${error.javaClass.simpleName}:${error.message ?: "-"}",
+                    "error=${error.javaClass.simpleName}",
             )
             false
         }

@@ -1,7 +1,10 @@
 package dev.qnzapret
 
 import android.content.Context
-import android.net.VpnService
+import android.content.ComponentName
+import android.os.Build
+import android.service.quicksettings.TileService
+import java.util.concurrent.CopyOnWriteArraySet
 
 internal object QnzapretVpnRuntimeStore {
     private const val PLATFORM = "android"
@@ -28,10 +31,34 @@ internal object QnzapretVpnRuntimeStore {
     private var telegramCompatibilitySetupRequired: Boolean = false
     private var telegramCompatibilityProxyEndpoint: String = ""
     private var telegramCompatibilityProxyMessage: String = ""
+    private var telegramSidecarState: String = "idle"
+    private var applicationContext: Context? = null
+    private val listeners = CopyOnWriteArraySet<(Map<String, Any>) -> Unit>()
+
+    fun addListener(context: Context, listener: (Map<String, Any>) -> Unit) {
+        applicationContext = context.applicationContext
+        listeners.add(listener)
+        listener(snapshot(context))
+    }
+
+    fun removeListener(listener: (Map<String, Any>) -> Unit) {
+        listeners.remove(listener)
+    }
+
+    private fun publish() {
+        val context = applicationContext ?: return
+        val value = snapshot(context)
+        listeners.forEach { listener -> listener(value) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            runCatching { TileService.requestListeningState(context,
+                ComponentName(context, QnzapretQuickSettingsTileService::class.java)) }
+        }
+    }
 
     @Synchronized
     fun snapshot(context: Context): Map<String, Any> {
-        syncPermission(context)
+        applicationContext = context.applicationContext
+        vpnPermissionGranted = VpnConsentStore.read(context)
         if (!serviceActive && state == RuntimeState.IDLE) {
             message = idleMessage()
         }
@@ -52,7 +79,9 @@ internal object QnzapretVpnRuntimeStore {
                 "none"
             },
             "trafficInterceptionActive" to tunnelActive,
-            "backendVersion" to "android-1",
+            "backendVersion" to "android-2",
+            "telegramSidecarState" to telegramSidecarState,
+            "degraded" to (telegramSidecarState == "failed"),
             "packetCodecReady" to packetCodecReady,
             "udpForwarderReady" to udpForwarderReady,
             "ipv6PacketCodecReady" to ipv6PacketCodecReady,
@@ -68,6 +97,7 @@ internal object QnzapretVpnRuntimeStore {
 
     @Synchronized
     fun onPrepareResult(context: Context, granted: Boolean): Map<String, Any> {
+        VpnConsentStore.record(context, granted)
         vpnPermissionGranted = granted
         state = RuntimeState.IDLE
         serviceActive = false
@@ -77,6 +107,7 @@ internal object QnzapretVpnRuntimeStore {
         } else {
             "VPN-разрешение отклонено. Запуск останется заблокированным до подтверждения."
         }
+        publish()
         return snapshot(context)
     }
 
@@ -86,6 +117,7 @@ internal object QnzapretVpnRuntimeStore {
         serviceActive = true
         clearRuntimeDetails()
         message = newMessage
+        publish()
     }
 
     @Synchronized
@@ -104,6 +136,7 @@ internal object QnzapretVpnRuntimeStore {
         newTelegramCompatibilitySetupRequired: Boolean = false,
         newTelegramCompatibilityProxyEndpoint: String = "",
         newTelegramCompatibilityProxyMessage: String = "",
+        newTelegramSidecarState: String = "idle",
     ) {
         state = RuntimeState.RUNNING
         serviceActive = true
@@ -120,7 +153,9 @@ internal object QnzapretVpnRuntimeStore {
         telegramCompatibilitySetupRequired = newTelegramCompatibilitySetupRequired
         telegramCompatibilityProxyEndpoint = newTelegramCompatibilityProxyEndpoint
         telegramCompatibilityProxyMessage = newTelegramCompatibilityProxyMessage
+        telegramSidecarState = newTelegramSidecarState
         message = newMessage
+        publish()
     }
 
     @Synchronized
@@ -129,6 +164,7 @@ internal object QnzapretVpnRuntimeStore {
         setupRequired: Boolean,
         endpoint: String,
         telegramMessage: String,
+        listenerReady: Boolean = ready,
     ) {
         if (state != RuntimeState.RUNNING && state != RuntimeState.STARTING) {
             return
@@ -137,6 +173,8 @@ internal object QnzapretVpnRuntimeStore {
         telegramCompatibilitySetupRequired = setupRequired
         telegramCompatibilityProxyEndpoint = endpoint
         telegramCompatibilityProxyMessage = telegramMessage
+        telegramSidecarState = if (listenerReady) "running" else "failed"
+        publish()
     }
 
     @Synchronized
@@ -144,15 +182,17 @@ internal object QnzapretVpnRuntimeStore {
         state = RuntimeState.STOPPING
         serviceActive = true
         message = newMessage
+        publish()
     }
 
     @Synchronized
     fun markIdle(context: Context, newMessage: String? = null) {
-        syncPermission(context)
+        vpnPermissionGranted = VpnConsentStore.read(context)
         state = RuntimeState.IDLE
         serviceActive = false
         clearRuntimeDetails()
         message = newMessage ?: idleMessage()
+        publish()
     }
 
     @Synchronized
@@ -161,11 +201,7 @@ internal object QnzapretVpnRuntimeStore {
         serviceActive = false
         clearRuntimeDetails()
         message = newMessage
-    }
-
-    @Synchronized
-    private fun syncPermission(context: Context) {
-        vpnPermissionGranted = VpnService.prepare(context) == null
+        publish()
     }
 
     private fun idleMessage(): String {
@@ -186,6 +222,7 @@ internal object QnzapretVpnRuntimeStore {
         telegramCompatibilitySetupRequired = false
         telegramCompatibilityProxyEndpoint = ""
         telegramCompatibilityProxyMessage = ""
+        telegramSidecarState = "idle"
     }
 
     private enum class RuntimeState(val wireValue: String) {

@@ -18,7 +18,8 @@ CF defaults могут работать без собственного серв
 ## Источники данных
 
 `TelegramRouteConfigProvider.kt` сначала собирает local config и cached public
-список, затем обновляет public данные/пробует routes в background. Signed
+список, при отсутствии cache использует поставляемый public seed из
+Flowseal v1.11.2, затем обновляет public данные/пробует routes в background. Signed
 QNZapret config пока только placeholder, не действующий источник.
 
 Public URL, используемый **кодом**:
@@ -32,8 +33,7 @@ Decoder для encoded `.com` entries считает буквы prefix, сдви
 `TelegramRouteDomainCodecTest.kt`.
 
 Cache: app-private `files/qnzapret/telegram_cf_domains_cache.json`, TTL 12 часов.
-При fetch failure используется stale cache; без него остаются local domains
-и direct routes. Local domains не перетираются public fetch.
+При fetch failure используется stale cache; без него используются bundled public seed, local domains и direct routes. Local domains не перетираются public fetch.
 
 Для согласованного smoke локальный `qnzapret/telegram_compat.json` ищется в
 app-private files/cache и external files dir:
@@ -62,6 +62,16 @@ External path может ограничиваться версией Android/п�
 Direct candidates: `kwsN.web.telegram.org`, legacy host и `kwsN-1.web.telegram.org`;
 для media direct `kwsN-1` идёт первым. Для CF всегда сначала `kwsN.<base>`, затем
 `kwsN-1.<base>`; score не поднимает второй variant выше первого.
+CDN203 использует отдельный `kws203.<base>`, не alias обычного DC2:
+анонимный req_pq показал, что такой alias отвечает master-DC ключами. Перед
+использованием CDN gateway сравниваются nonce-matched публичные key sets CDN203
+и DC2 этого gateway; они должны различаться и не пересекаться. Это проверка
+маршрута, а криптографическую аутентификацию по официальным CDN keys продолжает
+выполнять Telegram. Результат кэшируется 15 минут; параллельные клиенты делят
+одну проверку. Probe использует отдельное соединение с deadline, для реальных
+данных открывается свежее. CDN считается media flow, исходный signed DC marker
+не меняется. Direct DC2/DC4 используют upstream redirect `149.154.167.220`,
+с сохранением route hostname в SNI/Host и проверкой TLS.
 
 При `cfPriority=true`:
 
@@ -94,12 +104,18 @@ Client-to-WSS не пересылает произвольные read chunks: tr
 abridged/intermediate/padded-intermediate packets и сохраняет frame boundaries.
 Это существенно для voice/circle/file upload.
 
-Media watchdog смотрит на свежий 5-секундный progress после начального окна;
-low progress закрывает bridge как `low_media_throughput`. Итоговый score
-использует max(bytesUp, bytesDown). Для upload-heavy text с >128 KiB upstream
-и почти отсутствующими acknowledgements есть `low_upload_ack`; следующий retry
-может временно выбрать media/negative DC, а проблемный CF host получает
-5-минутный cooldown без автоматической блокировки alternate host того же base.
+В обратном направлении MTProto — byte stream: WebSocket payload передаётся
+порциями до 32 KiB сразу по мере прихода. Полный кадр не буферизуется; логический
+лимит 16 MiB не означает выделение такого массива. Это устраняет ожидание конца
+большого кадра и прежний отказ при размере чуть больше 1 MiB. Mask offset,
+continuation и Ping/Pong сохраняются между чтениями.
+
+Media watchdog закрывает только ожидающее ответа соединение без downstream
+progress 30 секунд. Idle после маленького стикера и медленная продолжающаяся
+загрузка не являются зависанием. Успешный маленький ответ с последующим idle
+не штрафует домен по средней скорости за весь срок соединения. Для upload-heavy
+text остаётся `low_upload_ack` и cooldown конкретного host; повторный маршрут
+не меняет logical DC или исходный media marker.
 
 ## Проверки и ограничения
 
@@ -117,3 +133,11 @@ probe, handshake, pool, score, bytesUp/Down, watchdog/close reason.
 проверять у официального upstream перед развёртыванием, не считать её частью
 реализованной Kotlin-конфигурации. Подписанный канал данных QNZapret с TTL,
 версиями и отзывом доменов остаётся будущей работой.
+
+## Надёжность обновления
+
+Seed находится в `runtime/assets/qnzapret/telegram/` с commit/SHA256 provenance.
+Fetch ограничен 64 KiB и таймаутами, список нормализуется/проверяется; cache
+пишется AtomicFile. Stop инвалидирует background generation и прерывает
+дальнейшие probes; stale callback не публикует новое состояние старого запуска.
+Это обновление данных routes, не скачивание исполняемого Kotlin/Native кода.

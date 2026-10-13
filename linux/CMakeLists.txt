@@ -162,6 +162,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/../runtime/telegram/flowseal/"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/telegram"
   COMPONENT Runtime)
 install(FILES "${CMAKE_SOURCE_DIR}/components/qnzapret_telegram.py"
+  "${CMAKE_SOURCE_DIR}/components/telegram_cdn.py"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/telegram/adapter" COMPONENT Runtime)
 install(FILES "${CMAKE_SOURCE_DIR}/components/component_updater.py"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/libexec" COMPONENT Runtime)
