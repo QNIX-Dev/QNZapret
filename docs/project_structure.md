@@ -213,7 +213,7 @@ test/
 
 - UI должен зависеть от общего Dart API, а не от Kotlin/Android деталей.
 - Новые platform adapters нужно добавлять за тем же контрактом или через его осознанное расширение.
-- Если контракт меняется, одновременно обновляются код, `docs/runtime_bridge_contract.md` и при необходимости `AGENTS.md`.
+- Если контракт меняется, одновременно обновляются код, `docs/runtime_bridge_contract.md`.
 
 ## Слой `lib/core/state/`
 

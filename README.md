@@ -101,20 +101,22 @@ lib/
 
 android/app/src/main/
   kotlin/dev/qnzapret/  Android runtime, VPN service, strategy proxy и Telegram mode
-  jni/                  native hev-socks5-tunnel integration
+  jni/                  NDK-сборка; hev-socks5-tunnel - git submodule
   assets/qnzapret/      hostlists и strategy payload assets
 
 docs/                   архитектура, runtime contracts и Android handoff
-qndocs/                 branch-specific agent/workflow documentation
 ```
 
 ## Запуск И Сборка
 
-Установите Flutter и Android tooling, затем подтяните зависимости:
+Установите Flutter и Android tooling. Нативный `hev-socks5-tunnel` подключен как git submodule (закреплен на `2.14.4`, вместе с вложенными), поэтому подтяните его и зависимости:
 
 ```bash
+git submodule update --init --recursive
 flutter pub get
 ```
+
+При свежем клоне можно сразу `git clone --recurse-submodules`.
 
 Запуск на Android:
 
