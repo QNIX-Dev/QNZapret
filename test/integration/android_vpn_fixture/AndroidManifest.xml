@@ -1,0 +1,22 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.qnzapret.vpnfixture">
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <application android:label="QNZapret VPN regression fixture" android:debuggable="true" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+    <activity android:name=".MainActivity" android:exported="true" />
+    <activity android:name=".NetworkProbeActivity" android:exported="true" />
+    <activity android:name=".UdpAssociationProbeActivity" android:exported="true" />
+    <activity android:name=".TelegramUriReceiverActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="tg" android:host="proxy" />
+      </intent-filter>
+    </activity>
+    <service android:name=".FixtureVpnService" android:exported="false" android:permission="android.permission.BIND_VPN_SERVICE" android:foregroundServiceType="specialUse">
+      <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Isolated emulator VPN regression test" />
+    </service>
+  </application>
+</manifest>

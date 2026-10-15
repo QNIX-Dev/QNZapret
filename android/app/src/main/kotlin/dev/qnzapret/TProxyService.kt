@@ -10,11 +10,11 @@ internal object TProxyService {
 
     @Keep
     @JvmStatic
-    external fun TProxyStartService(configPath: String, fd: Int)
+    external fun TProxyStartService(configPath: String, fd: Int): Boolean
 
     @Keep
     @JvmStatic
-    external fun TProxyStopService()
+    external fun TProxyStopService(): Boolean
 
     @Keep
     @JvmStatic

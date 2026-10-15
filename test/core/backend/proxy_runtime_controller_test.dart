@@ -70,6 +70,21 @@ void main() {
     },
   );
 
+  test('Linux default transaction includes Telegram sidecar', () async {
+    final runtime = _FakeRuntime(
+      snapshot: ProxyRuntimeSnapshot.initial(ProxyPlatform.linux),
+    );
+    final controller = ProxyRuntimeController(runtime: runtime);
+
+    addTearDown(controller.dispose);
+
+    final ok = await controller.start();
+
+    expect(ok, isTrue);
+    expect(runtime.startedConfig, ProxyLaunchConfig.defaultLinuxStrategy);
+    expect(runtime.startedConfig?.cloudflareEnabled, isTrue);
+  });
+
   test('controller waits for Android start transition to settle', () async {
     final runtime = _FakeRuntime(
       snapshot: const ProxyRuntimeSnapshot(
@@ -135,6 +150,9 @@ final class _FakeRuntime implements ProxyRuntime {
 
   @override
   ProxyPlatform get platform => _snapshot.platform;
+
+  @override
+  Stream<ProxyRuntimeEvent> get events => const Stream.empty();
 
   @override
   Future<ProxyRuntimeSnapshot> getSnapshot() async {

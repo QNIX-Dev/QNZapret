@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=dev.qnzapret.Telegram1
+Exec=/usr/libexec/qnzapret-telegram-sidecar
+SystemdService=qnzapret-telegram.service

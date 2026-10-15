@@ -109,7 +109,7 @@ docs/                   архитектура, runtime contracts и Android han
 
 ## Запуск И Сборка
 
-Установите Flutter и Android tooling. Нативный `hev-socks5-tunnel` подключен как git submodule (закреплен на `2.14.4`, вместе с вложенными), поэтому подтяните его и зависимости:
+Установите Flutter и Android tooling. Нативный `hev-socks5-tunnel` подключен как git submodule (закреплен на `2.19.0`, вместе с вложенными), поэтому подтяните его и зависимости:
 
 ```bash
 git submodule update --init --recursive

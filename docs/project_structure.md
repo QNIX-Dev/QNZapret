@@ -1,11 +1,9 @@
-# Project Structure
+# Карта проекта
 
-## Назначение документа
+Сверено с веткой `quriee` 12 октября 2026 года. Подробные поля API находятся в
+[runtime-контракте](runtime_bridge_contract.md), команды — в [QA](integration_workflow.md).
 
-Этот файл описывает текущую рабочую структуру проекта.
-Он должен помогать frontend- и backend-разработчикам быстро понять, где проходит ответственность каждого слоя.
-
-## Общая карта
+## Основные каталоги
 
 ```text
 docs/
@@ -138,9 +136,17 @@ android/
         TlsRecordSplitTransformTest.kt
 
 linux/
-  runner/resources/app_icon.png
-windows/
-test/
+  runner/                       GTK runner + async D-Bus bridge
+  runtime/                      system daemon, user sidecar, compiler, tests
+  components/                   updater, Telegram adapter, Python tests
+runtime/
+  assets/qnzapret/               lists, payloads, Linux binary/Lua, provenance
+  telegram/flowseal/proxy/       unmodified upstream Python headless core
+packaging/linux/                 DEB/RPM, systemd, D-Bus, Polkit, lifecycle
+windows/                        Flutter C++ runner; no real runtime adapter
+test/                          Dart/widget tests + Linux integration scripts
+docs/                          technical documentation and QA report
+.github/workflows/              Linux packaging and Windows build checks
 ```
 
 ## Слой `lib/main.dart`

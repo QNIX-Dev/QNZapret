@@ -1,7 +1,10 @@
 package dev.qnzapret
 
 import android.content.Context
-import android.net.VpnService
+import android.content.ComponentName
+import android.os.Build
+import android.service.quicksettings.TileService
+import java.util.concurrent.CopyOnWriteArraySet
 
 internal object QnzapretVpnRuntimeStore {
     private const val PLATFORM = "android"
@@ -31,7 +34,8 @@ internal object QnzapretVpnRuntimeStore {
 
     @Synchronized
     fun snapshot(context: Context): Map<String, Any> {
-        syncPermission(context)
+        applicationContext = context.applicationContext
+        vpnPermissionGranted = VpnConsentStore.read(context)
         if (!serviceActive && state == RuntimeState.IDLE) {
             message = idleMessage()
         }
@@ -46,6 +50,15 @@ internal object QnzapretVpnRuntimeStore {
             "strategyEngineReady" to strategyEngineReady,
             "trafficForwarderReady" to trafficForwarderReady,
             "tunnelActive" to tunnelActive,
+            "trafficInterceptionMode" to if (tunnelActive) {
+                "androidVpnTun"
+            } else {
+                "none"
+            },
+            "trafficInterceptionActive" to tunnelActive,
+            "backendVersion" to "android-2",
+            "telegramSidecarState" to telegramSidecarState,
+            "degraded" to (telegramSidecarState == "failed"),
             "packetCodecReady" to packetCodecReady,
             "udpForwarderReady" to udpForwarderReady,
             "ipv6PacketCodecReady" to ipv6PacketCodecReady,
@@ -61,6 +74,7 @@ internal object QnzapretVpnRuntimeStore {
 
     @Synchronized
     fun onPrepareResult(context: Context, granted: Boolean): Map<String, Any> {
+        VpnConsentStore.record(context, granted)
         vpnPermissionGranted = granted
         state = RuntimeState.IDLE
         serviceActive = false
@@ -70,6 +84,7 @@ internal object QnzapretVpnRuntimeStore {
         } else {
             "VPN-разрешение отклонено. Запуск останется заблокированным до подтверждения."
         }
+        publish()
         return snapshot(context)
     }
 
@@ -79,6 +94,7 @@ internal object QnzapretVpnRuntimeStore {
         serviceActive = true
         clearRuntimeDetails()
         message = newMessage
+        publish()
     }
 
     @Synchronized
@@ -114,6 +130,26 @@ internal object QnzapretVpnRuntimeStore {
         telegramCompatibilityProxyEndpoint = newTelegramCompatibilityProxyEndpoint
         telegramCompatibilityProxyMessage = newTelegramCompatibilityProxyMessage
         message = newMessage
+        publish()
+    }
+
+    @Synchronized
+    fun updateTelegramCompatibility(
+        ready: Boolean,
+        setupRequired: Boolean,
+        endpoint: String,
+        telegramMessage: String,
+        listenerReady: Boolean = ready,
+    ) {
+        if (state != RuntimeState.RUNNING && state != RuntimeState.STARTING) {
+            return
+        }
+        telegramCompatibilityProxyReady = ready
+        telegramCompatibilitySetupRequired = setupRequired
+        telegramCompatibilityProxyEndpoint = endpoint
+        telegramCompatibilityProxyMessage = telegramMessage
+        telegramSidecarState = if (listenerReady) "running" else "failed"
+        publish()
     }
 
     @Synchronized
@@ -137,15 +173,17 @@ internal object QnzapretVpnRuntimeStore {
         state = RuntimeState.STOPPING
         serviceActive = true
         message = newMessage
+        publish()
     }
 
     @Synchronized
     fun markIdle(context: Context, newMessage: String? = null) {
-        syncPermission(context)
+        vpnPermissionGranted = VpnConsentStore.read(context)
         state = RuntimeState.IDLE
         serviceActive = false
         clearRuntimeDetails()
         message = newMessage ?: idleMessage()
+        publish()
     }
 
     @Synchronized
@@ -154,11 +192,7 @@ internal object QnzapretVpnRuntimeStore {
         serviceActive = false
         clearRuntimeDetails()
         message = newMessage
-    }
-
-    @Synchronized
-    private fun syncPermission(context: Context) {
-        vpnPermissionGranted = VpnService.prepare(context) == null
+        publish()
     }
 
     private fun idleMessage(): String {

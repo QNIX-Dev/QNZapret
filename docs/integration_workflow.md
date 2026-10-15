@@ -1,125 +1,154 @@
-# Integration Workflow
+# Разработка, QA и Git
 
-## Назначение документа
+Вход для агента — [AGENTS.md](../AGENTS.md).
 
-Этот файл описывает рекомендуемый процесс совместной работы frontend- и backend-разработки на следующей стадии проекта.
+## Порядок изменения
 
-Цель:
+1. Проверить текущую ветку и незакоммиченные изменения.
+2. Изучить [обзор](project_brief.md), [структуру](project_structure.md),
+   [контракт](runtime_bridge_contract.md) и соответствующий platform handoff.
+3. Сначала зафиксировать изменение API/lifecycle, затем реализовать adapter и
+   application layer. Widgets не вызывают native code напрямую.
+4. Сохранить работу второго участника и платформенную независимость UI.
+5. Проверить затронутые сценарии, обновить документацию, сообщить ограничения.
 
-- сократить число расхождений между UI и runtime-реализацией
-- сделать handoff между frontend и backend предсказуемым
-- не ломать экранную логику при подключении реального Android strategy runtime
-- сохранять Android/Linux/Windows adapters за общей Dart-поверхностью
+Frontend отвечает за presentation, тему, motion, layout и удобство работы с
+runtime-состояниями; backend — за контракты, процессы, transport, права и
+диагностику. Конкретная просьба пользователя определяет объём текущей задачи.
 
-## Главный принцип
+## Среда и версии
 
-Работа идет по схеме `contract first`.
+- Dart constraint: `^3.11.4`, зависимости — `pubspec.yaml`/`pubspec.lock`.
+- Последняя локальная проверка: Flutter 3.47.6 / Dart 3.13.5, Linux x86_64.
+- Android build требует Python 3 для generated hostlist indexes.
+- Android: Java/Kotlin target 17, Gradle 8.14, AGP 8.11.1, Kotlin 2.2.20;
+  compile/target/min SDK и NDK берутся из Flutter tooling.
+- `android.builtInKotlin=false`, `android.newDsl=false` добавлены Flutter
+  migrator для текущего Android build. Предупреждения о будущей поддержке
+  Gradle/AGP/Kotlin не равны ошибке прошедшей сборки.
+- Android release пока подписывается debug key. Новый Android build берёт
+  versionName/versionCode из Flutter (`0.0.6+7`); UI использует package info.
+- Gradle ограничен 3 GiB heap, двумя workers; Kotlin компилируется in-process.
+  На 16 GiB хосте тяжёлые сборки и emulator smoke выполнять последовательно.
+- Linux build: clang/C++, CMake, Ninja, pkg-config, GTK3/GIO development
+  packages и Python 3. Packaging требует `dpkg-deb` или fallback ar/tar и
+  `rpmbuild`; скрипт сейчас собирает оба формата, а не только DEB.
 
-Порядок такой:
+## Проверки кода
 
-1. Сначала уточняется `ProxyRuntime` contract.
-2. Потом backend/platform layer реализует его в adapter.
-3. Потом UI или composition root переключается со stub/runtime placeholder на реальную реализацию.
-4. Любое изменение lifecycle semantics сначала фиксируется в контракте, потом в коде.
+Из корня проекта:
 
-## Роли
+```bash
+flutter pub get
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+flutter test
+flutter build linux --release
+ctest --test-dir build/linux/x64/release --output-on-failure
+bash packaging/linux/tests/verify_packaging.sh
+python3 -B -m unittest discover -s linux/components -p '*_test.py'
+```
 
-### Frontend
+Android:
 
-Отвечает за:
+```bash
+cd android
+./gradlew :app:testDebugUnitTest
+cd ..
+flutter build appbundle --release
+# Для установки на устройство дополнительно:
+flutter build apk --release
+```
 
-- UI/UX
-- theme
-- presentation layer
-- адаптацию runtime snapshot в экранное поведение
-- продуктовый Home/Logs/Settings shell
-- локализацию user-facing runtime/status/log сообщений
+Для согласованной параллельной установки с несовместимой старой подписью:
+`cd android` и `./gradlew :app:assembleRelease -PqnzPreview=true`.
+Пакет `dev.qnzapret.preview` и настройки отделены от обычного приложения;
+старую версию/данные не удалять. JNI namespace сохраняется.
 
-### Backend
+PowerShell использует `.\gradlew.bat :app:testDebugUnitTest` из `android/`.
+`flutter run -d <DEVICE_ID>` требует ID из `flutter devices`; не предполагать,
+что устройство имеет идентификатор `android`.
 
-Отвечает за:
+Windows: `flutter build windows --release` на Windows-хосте. Workflow
+`.github/workflows/windows-release.yml` проверяет analyze/test/release build.
+Linux workflow строит Debian 12 bundle и Fedora package. Наличие workflow
+не означает, что он запущен или прошёл для текущего commit.
 
-- запуск и остановку реального runtime
-- platform-specific bridge implementation
-- Android service lifecycle
-- runtime status
-- будущий поток логов
-- ошибки и recoverability semantics
+Для документационных правок без изменения кода проверяются ссылки, пути,
+примеры, версии и соответствие implementation. Прежние build/smoke результаты
+не выдаются за новый запуск. Для изменений кода выполняются relevant tests и
+release-сборки затронутых платформ; недоступную платформу проверить в CI/на
+нативном хосте либо явно отметить непроверенной перед релизом.
 
-### Совместная зона
+## Linux smoke
 
-- `docs/runtime_bridge_contract.md`
-- `lib/core/backend/backend.dart`
-- `lib/core/backend/proxy_runtime.dart`
-- `lib/core/backend/android_proxy_runtime.dart`
-- `lib/core/backend/proxy_runtime_controller.dart`
-- `lib/core/backend/proxy_runtime_factory.dart`
-- `android/app/src/main/kotlin/dev/qnzapret/ProxyRuntimeBridge.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnService.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/QnzapretVpnRuntimeStore.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/QnzapretAndroidRuntime.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetStore.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/StrategyAssetVerifier.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/HostlistMatcher.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/L7Detectors.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimeEngine.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/StrategyProfile.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/StrategyRuntimePlan.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/LocalStrategyProxy.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/StrategySocks5Server.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/TProxyService.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/IpPacketCodec.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/QuicHostCorrelation.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/TcpRelayState.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/TunTransport.kt`
-- `android/app/src/main/kotlin/dev/qnzapret/UnderlyingNetworkSelector.kt`
+GUI проверяется обычным пользователем после установки DEB/RPM. Открытие GUI
+активирует D-Bus helpers для snapshot, но не включает перехват и обновления.
 
-Именно эти артефакты должны рассматриваться как shared contract surface для текущей Android-интеграции.
+```bash
+sudo test/integration/linux_netns_runtime_test.sh
+```
 
-## Практический цикл работы
+Без root скрипт возвращает **77 (skip)**. С root он создаёт отдельные netns,
+проводит HTTP/TLS, проверяет counters/L7, аварийную очистку и чужую nft table.
+Не считать этот тест проверкой ISP DPI, QUIC или текущих Telegram endpoints.
 
-### Этап 1. Согласование контракта
+Реальная проверка установленного пакета:
 
-Перед изменением backend-интеграции нужно зафиксировать:
+- Start/отмена Polkit/повторный Start без подвисания UI.
+- Сеть без обновлений и с обновлениями, недоступный GitHub, повреждённый или
+  несовместимый компонент; сохранение локальной версии и fallback.
+- NFQUEUE + собственная nft table + реальные HTTP/HTTPS/QUIC и целевые ресурсы.
+- Telegram setup до входа, штатный confirm, live bridge; listener без клиента
+  должен показывать необходимость настройки, а не подтверждённый успех.
+- Ошибка sidecar и rollback, Stop/повторный Stop, worker crash, GUI restart.
+- Upgrade/reboot/uninstall на чистых Debian/Ubuntu/Fedora перед релизом.
 
-- какие методы `ProxyRuntime` обязательны
-- какие поля snapshot UI реально использует
-- какие состояния backend может гарантировать
-- какие native errors считаются публичными
-- как отличать foreground service от fully connected TUN-to-SOCKS stack
-- какие части strategy profile являются стабильным no-root subset
+`linux_real_strategy_matrix.sh` — отдельный root-тест в реальной сети при
+остановленном QNZapret. Он использует встроенный allowlist; не запускается
+автоматически при каждой документационной правке.
 
-Результат:
+## Android smoke
 
-- обновленный `docs/runtime_bridge_contract.md`
-- при необходимости обновленный `proxy_runtime.dart`
-- при необходимости обновленный Android bridge/wire protocol
+На устройстве проверить VPN consent (успех/отказ), Start/Stop/revoke,
+TUN/forwarder flags, HTTP/TLS/QUIC, DNS/Private DNS, IPv4-only и IPv6 сети,
+background/notification/QS controls. Не удалять приложение/данные ради теста
+без согласования; `adb install -r` использовать только для нужного устройства.
 
-### Этап 2. Backend делает adapter
+Telegram: local listener отдельно от успешных handshake/bridge; UI-start
+и notification action; public routes без локального config; local override;
+text/media/voice/video/file upload, cooldown, pool, watchdog и Stop. Личные
+аккаунты и сообщения не используются автоматически как тестовые fixtures.
+Логи: `QNZapretService`, `QNZapretTun`, `QNZapretProxy`, `QNZapretNetTest`,
+`QNZapretTgCompat`; секреты и приватные домены не публиковать.
 
-Backend реализует platform adapter так, чтобы наружу он соответствовал Dart-контракту.
+Автоматические account-free сценарии только для отдельного эмулятора:
 
-Важно:
+```bash
+python3 test/integration/android_qs_vpn_regression.py --serial emulator-5554 --apk <APK>
+python3 test/integration/android_runtime_smoke.py --serial emulator-5554 --apk <APK>
+python3 test/integration/android_telegram_smoke.py --serial emulator-5554
+```
 
-- platform-specific детали остаются внутри adapter
-- UI не должен разбирать native payload вручную
-- Android bridge должен возвращать payload, совместимый с `ProxyRuntimeSnapshot.fromMap`
-- ошибки должны иметь стабильные коды, если UI начинает на них опираться
+Они отвергают физический телефон, меняют тестовые appops/QS и используют
+отдельный fixture APK. Проверяются competing VPN, JNI/TUN, UDP association
+isolation, HTTPS отдельного UID и Stop. Сеть хоста/его обход могут влиять на
+результат; это не независимое подтверждение DPI/media на смартфоне.
 
-### Этап 3. Подключение в composition/UI
+## Git и сабмодуль hev-socks5-tunnel
 
-Composition root создает `ProxyRuntime` и передает его через Riverpod provider.
-Экранный слой работает через `RuntimeController`, который внутри использует `ProxyRuntimeController`.
-Фронтендеру не нужно вызывать `MethodChannel` или Android classes напрямую.
+Работать в пользовательской ветке, сохранять чужие изменения. Коммит — после
+верификации и разрешения пользователя; уже данное разрешение не спрашивать
+повторно. Push/PR — когда нужна публикация. В `main` изменения только через PR;
+merge и переписывание истории требуют отдельного разрешения.
 
-Ожидаемый принцип:
+`hev-socks5-tunnel` (`android/app/src/main/jni/hev-socks5-tunnel`) — Git submodule,
+закреплен на теге `2.19.0` вместе с вложенными сабмодулями. Чтобы обновить:
 
-- `main.dart` создает runtime через `createDefaultProxyRuntime()`
-- `main.dart` переопределяет `proxyRuntimeProvider`
-- `QnzapretApp` открывает `AppShell`
-- `AppShell` управляет Home/Logs навигацией и settings route
-- UI получает runtime state через `runtimeControllerProvider`
-- кнопки и индикаторы используют `initialize`, `prepare`, `start`, `stop`, `refresh`, `isBusy`, `needsPrepare`, `canStart`, `canStop`, `lastFailure`
+1. Перейти в сабмодуль и сделать `git checkout <tag>`.
+2. Сверить `src/hev-jni.c` с Kotlin-контрактом `TProxyService.kt`.
+3. Выполнить `git add` сабмодуля, затем `git submodule update --init --recursive`.
+4. Обновить `REV_ID` в `android/app/build.gradle.kts` и `android/app/src/main/jni/provenance.json`.
 
 Если контракт не сломан, экранный слой не должен знать Kotlin/Android details.
 

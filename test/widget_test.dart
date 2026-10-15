@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qnzapret/app/app.dart';
+import 'package:qnzapret/core/motion/app_scroll_behavior.dart';
+import 'package:qnzapret/core/motion/app_smooth_scroll.dart';
 import 'package:qnzapret/core/persistence/shared_preferences_provider.dart';
 import 'package:qnzapret/core/ui/components/terminal_illustration.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,15 +19,24 @@ void main() {
         child: const QnzapretApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 700));
 
     expect(find.text('QNZapret'), findsOneWidget);
     expect(find.text('Разрешить запуск'), findsOneWidget);
-    expect(find.text('Связь с системой'), findsOneWidget);
     expect(find.text('Сервис'), findsOneWidget);
-    expect(find.text('Ядро обхода'), findsOneWidget);
+    expect(find.text('Перехват'), findsOneWidget);
+    expect(find.text('Telegram'), findsOneWidget);
     expect(find.text('Runtime bridge'), findsNothing);
     expect(find.text('Запустить runtime'), findsNothing);
+    expect(find.byType(Scrollbar), findsNothing);
+
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.scrollBehavior, isA<AppScrollBehavior>());
+    final homeScroll = tester.widget<SingleChildScrollView>(
+      find.byType(SingleChildScrollView),
+    );
+    expect(homeScroll.physics, isA<AppBouncingScrollPhysics>());
+    expect(homeScroll.controller, isA<AppScrollController>());
   });
 
   testWidgets('mobile settings opens as a page with top blocks visible', (
@@ -45,10 +56,11 @@ void main() {
         child: const QnzapretApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 700));
 
     await tester.tap(find.byTooltip('Настройки'));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
 
     expect(find.text('Настройки'), findsOneWidget);
     expect(find.text('QNZapret'), findsOneWidget);
@@ -71,7 +83,7 @@ void main() {
         child: const QnzapretApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 700));
 
     expect(find.text('Логи'), findsOneWidget);
     expect(
@@ -79,6 +91,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('строк'), findsWidgets);
+    expect(find.byType(Scrollbar), findsNothing);
 
     final terminalBottom = tester
         .getBottomLeft(find.byType(TerminalIllustration))
@@ -108,7 +121,7 @@ void main() {
         child: const QnzapretApp(),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 700));
 
     final settingsIcon = find.byIcon(Icons.tune_rounded);
     final title = find.text('Логи');
@@ -117,6 +130,7 @@ void main() {
     expect(settingsIcon, findsOneWidget);
     expect(title, findsOneWidget);
     expect(illustration, findsOneWidget);
+    expect(find.byType(Scrollbar), findsNothing);
 
     final settingsBottom = tester.getBottomLeft(settingsIcon).dy;
     final titleTop = tester.getTopLeft(title).dy;

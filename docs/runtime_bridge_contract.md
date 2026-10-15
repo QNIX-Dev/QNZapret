@@ -1,6 +1,8 @@
-# Runtime Bridge Contract
+# Контракт Flutter/runtime
 
-## Назначение документа
+Сверено с кодом ветки `quriee` 12 октября 2026 года.
+Основные источники: `lib/core/backend/proxy_runtime.dart`, adapters в той же
+директории, Android `ProxyRuntimeBridge.kt`, Linux runner и `runtime_contract.*`.
 
 Этот файл фиксирует текущий контракт между Flutter frontend и platform/runtime implementations.
 
@@ -63,84 +65,15 @@
 ```dart
 abstract interface class ProxyRuntime {
   ProxyPlatform get platform;
-
+  Stream<ProxyRuntimeEvent> get events;
   Future<ProxyPrepareResult> prepare();
-
   Future<ProxyRuntimeSnapshot> getSnapshot();
-
   Future<void> start(ProxyLaunchConfig config);
-
   Future<void> stop();
 }
-```
 
-Текущие реализации:
-
-- `StubProxyRuntime` - stub для состояния, где нативный backend еще не подключен.
-- `AndroidProxyRuntime` - adapter поверх Android `MethodChannel`.
-- `ProxyRuntimeController` - UI/application facade над `ProxyRuntime`, который хранит snapshot, busy/error state и default launch config.
-- `createDefaultProxyRuntime()` - composition helper: на Android возвращает `AndroidProxyRuntime`, на Linux/Windows возвращает stub-адаптеры до появления desktop runtime.
-- `RuntimeController` в `lib/core/state/runtime_controller.dart` - Riverpod application layer, который превращает `ProxyRuntimeController` в продуктовые CTA, status chips и локальные diagnostic logs.
-
-Рекомендуемая точка входа для frontend:
-
-```dart
-import 'package:qnzapret/core/backend/backend.dart';
-
-final controller = ProxyRuntimeController(runtime: runtime);
-await controller.initialize();
-await controller.prepare();
-await controller.start();
-await controller.stop();
-```
-
-## Платформы
-
-```dart
-enum ProxyPlatform { android, linux, windows }
-```
-
-Текущий реальный adapter начат только для Android.
-Linux и Windows должны по возможности прийти к той же Dart-поверхности runtime.
-
-## Runtime states
-
-```dart
-enum ProxyRuntimeState { idle, starting, running, stopping, failed }
-```
-
-Интерпретация:
-
-- `idle` - runtime не активен и готов к следующему действию
-- `starting` - runtime находится в процессе запуска
-- `running` - Android foreground service активен; детали готовности engine/forwarder смотрятся в snapshot flags
-- `stopping` - runtime находится в процессе остановки
-- `failed` - операция runtime завершилась ошибкой или runtime не может продолжать работу
-
-Важно: сейчас `running` на Android означает, что foreground `VpnService` активен и native runtime прошел стартовый lifecycle.
-Это еще не означает, что TUN fd уже передан в `hev-socks5-tunnel` и связан с реальным локальным SOCKS5 proxy.
-Для этого в snapshot есть отдельный флаг `trafficForwarderReady`.
-
-## Модели
-
-### `ProxyPrepareResult`
-
-Назначение:
-
-- результат подготовки platform runtime перед запуском
-- на Android сейчас отражает результат VPN permission flow
-
-Поля:
-
-- `granted`
-- `message`
-
-Wire payload:
-
-```dart
-{
-  'granted': true,
-  'message': 'VPN-разрешение получено. Сервисы готовы к запуску.',
+abstract interface class TelegramProxySetupRuntime {
+  Future<void> setupTelegramProxy();
 }
 ```
 
@@ -556,76 +489,168 @@ QNZapretNetTest
 Channel:
 
 ```text
-dev.qnzapret/proxy_runtime
+snapshot: {type: snapshot, snapshot: <map>}
+log: {type: log, log: {
+  timestampMillis: int, level: debug|info|warning|error,
+  source: String, code: String, message: String
+}}
 ```
 
-Methods:
+Dart `ProxyRuntimeEvent` содержит kind и nullable snapshot/log.
+Linux объединяет D-Bus события с кэшированными snapshot без вложенных RPC;
+Android публикует snapshot updates и lifecycle log events через тот же канал;
+Windows возвращает `Stream.empty()`. Application-журнал ограничен 240 событиями.
+Подробные сетевые Android logcat-события пока не транслируются целиком в UI.
 
-- `prepare`
-- `getSnapshot`
-- `start`
-- `stop`
+## Launch config
 
-`start` arguments:
+`ProxyLaunchConfig.toMap()` передаёт:
+`localHost`, `localPort`, `poolSize`, `cloudflareEnabled`, `secret`,
+`strategyProfile`, `establishTunnel`, `tunnelMtu`.
 
-```dart
-{
-  'config': ProxyLaunchConfig(...).toMap(),
-}
-```
+| Параметр | Android default | Linux default/применение |
+| --- | --- | --- |
+| localHost/localPort | `127.0.0.1:1080` | поля не настраивают фиксированный Telegram endpoint |
+| poolSize | `0` | не управляет upstream pool Linux |
+| cloudflareEnabled | `false` | `true`: runner включает sidecar в transaction |
+| secret | пустая строка | runner не задаёт secret sidecar; он хранится в user state |
+| establishTunnel | `true` | игнорируется: Linux использует NFQUEUE, не TUN |
+| tunnelMtu | `8500` | не применяется к NFQUEUE |
+| strategyProfile | `defaultLightweight` | сериализуется и повторно проверяется daemon |
 
-Native return values:
+`cloudflareEnabled=false` на Android не выключает Kotlin Telegram proxy:
+`QnzapretVpnService` запускает его отдельно. Это унаследованное поле config,
+а не общий переключатель Telegram для всех платформ. Linux Prepare и snapshots
+также проверяют sidecar; его исключение из Start не изолирует все диагностики.
 
-- `prepare` возвращает map с `granted` и `message`
-- `getSnapshot` возвращает map для `ProxyRuntimeSnapshot.fromMap`
-- `start` возвращает `null` при успешной отправке команды запуска
-- `stop` возвращает `null` при успешной отправке команды остановки
+При Android `establishTunnel=false` engine может быть готов, но перехвата нет.
+IPv6 route включается только при usable IPv6/default route underlying-сети.
+Не менять MTU/defaults без проверки реального трафика и lifecycle.
 
-## Lifecycle expectations
+## StrategyProfile
 
-### Android prepare flow
+Поля: `id`, `name`, `description`, `unmatchedTrafficPolicy`, `blobs`, `rules`,
+optional `endpointPolicies`. Правило содержит порты, protocols, hostlists и
+ordered actions; action — kind, optional position/blobKey, repeats.
+Модели и enum сериализуются именами из `proxy_runtime.dart`.
 
-1. UI/application layer вызывает `prepare()`.
-2. Android bridge проверяет `VpnService.prepare`.
-3. Если нужно разрешение, открывается системный consent screen.
-4. Результат возвращается в Dart как `ProxyPrepareResult`.
-5. `getSnapshot()` после prepare должен отражать актуальный `vpnPermissionGranted`.
+Дефолтный переносимый профиль:
 
-### Android start flow
+- HTTP TCP/80: TCP hostlists, `fake(repeats=1)`, `split(position=1)`.
+- TLS TCP/443: те же hostlists, fake с `tls_google`, split.
+- QUIC UDP/443: `udpFake(quic_google)`, без обязательного hostlist match.
+- `unmatchedTrafficPolicy=direct`: не запрещать трафик вне списков.
 
-1. UI/application layer вызывает `start(config)`.
-2. Если permission отсутствует, Android bridge возвращает ошибку `vpn_permission_required`.
-3. Если permission есть, store получает `starting`.
-4. Foreground `QnzapretVpnService` стартует.
-5. Service получает config, компилирует strategy profile и проверяет Android assets.
-6. Service стартует local strategy SOCKS5 proxy, загружает strategy engine и поднимает TUN только при `establishTunnel=true` и готовом `hev-socks5-tunnel`.
-7. Runtime message отражает `unmatchedTrafficPolicy`, чтобы было видно, что трафик вне hostlists не должен попадать под desync.
-8. Service переводит store в `running`.
-9. `getSnapshot()` возвращает актуальное состояние.
+Canonical lists/payloads находятся в `runtime/assets/qnzapret/`.
+Android APK asset paths остаются `qnzapret/lists/...` и `qnzapret/payloads/...`.
 
-### Android stop flow
+Android использует `StrategyRuntimeEngine`: HTTP Host/TLS SNI, lazy exact/suffix
+hostlists, payload blobs, TLS record split, UDP fake и QUIC Initial. TCP FAKE
+из переносимого профиля пропускается с `raw_injection_unavailable`: ordinary
+socket write не является безопасной raw injection и повреждает HTTP/TLS stream.
+Корреляция DNS UDP/53/prior TCP не покрывает надёжно DoH/DoT.
+Raw sequence/timestamp fooling и IP fragmentation этим no-root API не обещаются.
 
-1. UI/application layer вызывает `stop()`.
-2. Store получает `stopping`.
-3. Android service останавливается.
-4. Store возвращается в `idle`.
+Linux поддерживает только ограниченный compiler allowlist. Входные actions
+переводятся в Linux-specific HTTP/TLS/QUIC аргументы nfqws2, а не выполняются
+буквально как Android writes. `endpointPolicies` runner не сериализует;
+Linux remote relay этим полем не настраивается. Неподдержанный профиль должен
+возвращать ошибку, не превращаться в shell text.
 
-## Требования к будущей backend-реализации
+Android `endpointPolicies` поддерживает TCP `remoteRelay` через SOCKS5,
+no-auth/username-password и original IPv4/IPv6/domain target. HTTPS CONNECT
+только зарезервирован. Формат и ошибки — в
+[relay-контракте](android_telegram_remote_relay_contract.md).
 
-- Не отдавать platform-specific payloads напрямую в UI.
-- Не смешивать runtime handles с Flutter widgets.
-- Все низкоуровневые события сначала адаптировать до Dart-моделей контракта.
-- Сохранять единый runtime API для Android/Linux/Windows, насколько это возможно.
-- Не расширять контракт без понятного UI/backend сценария.
-- При добавлении logs/status streams зафиксировать их здесь до активного использования в UI.
+## Snapshot и состояния
 
-## Что желательно согласовать до production runtime
+`ProxyRuntimeState`: `idle`, `starting`, `running`, `stopping`, `failed`.
+`running` — состояние lifecycle; готовность реального перехвата проверяется
+отдельными flags. `TrafficInterceptionMode`: `none`, `androidVpnTun`, `linuxNfqueue`.
 
-- какие поля `ProxyLaunchConfig` останутся стабильными
-- какие native error codes считаются публичными
-- как отличать "Android service running" от "TUN-to-SOCKS fully connected"
-- как будет устроен log stream
-- нужен ли отдельный health-check или diagnostics snapshot
-- как local strategy proxy будет читать hostlists/payload blobs из Android assets и пользовательского storage
-- какие strategy actions остаются в no-root subset, а какие явно требуют root/raw packet mode
-- какая форма desktop adapters нужна для Linux и Windows
+| Поля | Смысл |
+| --- | --- |
+| platform/state/message | Платформа, lifecycle, сообщение пользователю |
+| backendConnected | Доступен platform bridge; не проверка внешнего интернета |
+| vpnPermissionGranted | Последний известный Android consent; на Linux совместимое поле всегда true |
+| serviceActive | Активен Android service / Linux transaction |
+| strategyEngineReady | Android engine/assets готовы; Linux worker/queue готовы |
+| trafficForwarderReady | Android TUN-to-SOCKS готов; Linux nft transaction применена |
+| tunnelActive | Только Android TUN, на Linux false |
+| trafficInterceptionMode/Active | Общий механизм и факт перехвата |
+| queueRegistered/nftRulesInstalled/interceptionReady | Linux NFQUEUE + rules; общий признак готовности |
+| packetCodecReady/udpForwarderReady/tcpForwarderReady | Capabilities Android TUN/SOCKS5 слоя |
+| ipv6PacketCodecReady/ipv6UdpForwarderReady | Поддержка IPv6 кодека/relay, не гарантия IPv6 внешней сети |
+| activeProfileName/backendVersion/runtimeOwnerUid | Профиль, версия backend API, Linux UID владельца |
+| telegramSidecarState | unavailable/idle/starting/running/stopping/failed |
+| degraded/partialFailureCode/partialFailureMessage | Частичный отказ |
+| telegramCompatibilityProxyReady/SetupRequired/Endpoint/Message | Платформенное состояние Telegram, см. ниже |
+
+Последние четыре поля имеют полный prefix `telegramCompatibility`:
+`telegramCompatibilityProxyReady`, `telegramCompatibilitySetupRequired`,
+`telegramCompatibilityProxyEndpoint`, `telegramCompatibilityProxyMessage`.
+
+Legacy Android payload без interception fields выводит mode/active из
+`tunnelActive`, readiness — из `tunnelActive && trafficForwarderReady`.
+Linux legacy queue/rules могут выводиться из engine/forwarder flags.
+Преобразование выполняет `ProxyRuntimeSnapshot.fromMap`, не widgets.
+
+### Telegram readiness
+
+На Android и Linux ProxyReady теперь требует живого MTProto+upstream bridge;
+SidecarState=running означает работающий listener. Android считает active
+bridges отдельно от клиентов в handshake; закрытие последнего bridge снимает
+успешный статус и публикует snapshot. SetupRequired на Android дополнительно
+учитывает fingerprint и подтверждение в текущем запуске, на Linux — наличие
+listener без живого bridge. UI: «Нужна настройка»/«Ожидает Telegram» до bridge,
+«Подключён» при bridge. Setup доступен и из UI, и через Android notification.
+
+Android Start выполняет runtime lifecycle в отдельном executor. Сетевой self-test
+запускается асинхронно после готовности (`runtime_ready`) и не задерживает Start.
+Generation guards предотвращают late running после Stop/revoke. Ошибка старта
+сохраняется при onDestroy; JNI isRunning проверяется также health monitor.
+
+## Linux D-Bus и lifecycle
+
+| Bus | Object/interface | Методы |
+| --- | --- | --- |
+| system `dev.qnzapret.Runtime1` | `/dev/qnzapret/Runtime1`, `dev.qnzapret.Runtime1` | GetVersion, Prepare, GetSnapshot, Start(s profile), Stop |
+| session `dev.qnzapret.Telegram1` | `/dev/qnzapret/Telegram1`, `dev.qnzapret.Telegram1` | Prepare, GetSnapshot, Start, Stop, Retry, GetSetupUri |
+
+Оба публикуют `SnapshotChanged(a{sv})` и `LogEvent(a{sv})`.
+Runtime API version — `1.0.0`, это не версия приложения или nfqws2.
+
+Start/Stop авторизуются Polkit `dev.qnzapret.runtime.manage` по реальному
+unique system-bus sender. UID клиента не принимается как доказательство.
+Start: авторизация -> bounded component updates -> compiler/preflight ->
+worker/NFQUEUE -> nft -> sidecar -> Telegram setup. Ошибка sidecar откатывает
+system runtime; отказ открытия Telegram только предупреждает. Stop: удалить
+свои nft rules -> остановить worker -> остановить sidecar. При отказе Polkit
+не выключается только одна половина transaction.
+
+`setupTelegram` получает URI по session D-Bus и предпочитает
+`org.freedesktop.Application.Open`, иначе стандартный обработчик tg://.
+Secret не логируется; первый native confirm Telegram обязателен.
+GUI/daemon остаются отзывчивыми при ожидании D-Bus и Polkit.
+Полные алгоритмы, compiler и recovery — в [Linux handoff](linux_runtime_handoff.md).
+
+## Публичные ошибки
+
+Android: `vpn_prepare_in_progress`, `vpn_permission_required`, `vpn_start_failed`,
+`android_telegram_unavailable`, `android_telegram_setup_failed`.
+Linux: `linux_backend_unavailable`, `linux_backend_version_mismatch`,
+`linux_authorization_denied`, `linux_nft_unavailable`, `linux_nfqueue_unavailable`,
+`linux_queue_conflict`, `linux_profile_invalid`, `linux_profile_parse_rejected`,
+`linux_profile_dry_run_nonzero`, `linux_profile_dry_run_signaled`,
+`linux_profile_dry_run_spawn_failed`, `linux_nfqws_spawn_failed`,
+`linux_queue_registration_timeout`, `linux_nft_transaction_failed`,
+`linux_nfqws_unexpected_exit`, `linux_runtime_owned_by_other_user`,
+`linux_start_in_progress`, `linux_start_cancelled`,
+`linux_telegram_unavailable`, `linux_telegram_start_failed`,
+`linux_telegram_start_in_progress`, `linux_telegram_start_cancelled`,
+`linux_telegram_setup_failed`, `linux_telegram_stop_failed`, `linux_stop_failed`.
+GIO/D-Bus transport errors также возможны. Не проверять ошибки по тексту сообщения.
+
+Изменение wire fields/methods требует обновления adapters, совместимости старых
+payload, tests и этого документа в одном изменении; общий API не должен
+обещать неподдержанные возможности платформы.

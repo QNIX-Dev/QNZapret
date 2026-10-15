@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/app_metadata.dart';
 import '../../../core/backend/backend.dart';
+import '../../../core/motion/app_smooth_scroll.dart';
 import '../../../core/state/runtime_controller.dart';
 import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/connected_flow_illustration.dart';
@@ -42,17 +43,14 @@ class HomeScreen extends ConsumerWidget {
             ? constraints.maxHeight - bottomInset
             : 0.0;
 
-        return SingleChildScrollView(
-          physics: const BouncingScrollPhysics(
-            parent: AlwaysScrollableScrollPhysics(),
-          ),
+        return AppSmoothSingleChildScrollView(
           child: Column(
             children: [
               ConstrainedBox(
                 constraints: BoxConstraints(minHeight: heroMinHeight),
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: context.appThemeExtras.glassSurface,
+                    color: context.appThemeExtras.mainGlassSurface,
                     borderRadius: BorderRadius.circular(heroRadius),
                     border: Border.all(
                       color: context.appThemeExtras.glassStroke,
@@ -84,6 +82,8 @@ class HomeScreen extends ConsumerWidget {
                                   child: _HeroDetails(
                                     runtimeView: runtimeView,
                                     centered: false,
+                                    onTelegramSetup:
+                                        controller.setupTelegramProxy,
                                     onPrimaryAction: () async {
                                       HapticFeedback.lightImpact();
                                       if (runtimeView.canStopCommand) {
@@ -116,6 +116,7 @@ class HomeScreen extends ConsumerWidget {
                           _HeroDetails(
                             runtimeView: runtimeView,
                             centered: true,
+                            onTelegramSetup: controller.setupTelegramProxy,
                             onPrimaryAction: () async {
                               HapticFeedback.lightImpact();
                               if (runtimeView.canStopCommand) {
@@ -186,11 +187,13 @@ class _HeroDetails extends StatelessWidget {
     required this.runtimeView,
     required this.centered,
     required this.onPrimaryAction,
+    required this.onTelegramSetup,
   });
 
   final RuntimeViewState runtimeView;
   final bool centered;
   final Future<void> Function() onPrimaryAction;
+  final Future<void> Function() onTelegramSetup;
 
   @override
   Widget build(BuildContext context) {
@@ -229,6 +232,22 @@ class _HeroDetails extends StatelessWidget {
                 : null,
           ),
         ),
+        if (runtimeView.snapshot.telegramSidecarState ==
+                TelegramSidecarState.running &&
+            !runtimeView.snapshot.telegramCompatibilityProxyReady) ...[
+          const SizedBox(height: AppSpacing.md),
+          OutlinedButton.icon(
+            onPressed: runtimeView.isBusy ? null : onTelegramSetup,
+            icon: const Icon(Icons.send_rounded),
+            label: const Text('Настроить Telegram'),
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            'Подтвердите подключение прокси в окне Telegram. Вход в аккаунт не требуется.',
+            style: Theme.of(context).textTheme.bodySmall,
+            textAlign: centered ? TextAlign.center : TextAlign.start,
+          ),
+        ],
         if (message case final message?) ...[
           const SizedBox(height: AppSpacing.md),
           AnimatedSwitcher(
@@ -265,24 +284,29 @@ class _HeroDetails extends StatelessWidget {
       return failure.message;
     }
 
-    if (snapshot.tunnelActive && snapshot.trafficForwarderReady) {
-      return 'Туннель и передача трафика активны.';
+    if (snapshot.hasPartialFailure) {
+      return snapshot.partialFailureMessage ??
+          'Основной сервис активен, но часть компонентов недоступна.';
+    }
+
+    if (snapshot.isOperational) {
+      return 'Перехват трафика готов.';
     }
 
     if (snapshot.state == ProxyRuntimeState.running &&
         snapshot.serviceActive &&
-        !snapshot.tunnelActive) {
-      return 'Системный сервис активен; туннель выключен текущей конфигурацией.';
+        !snapshot.hasVerifiedInterception) {
+      return 'Системный сервис активен, но перехват еще не готов.';
     }
 
     if (snapshot.strategyEngineReady) {
-      return 'Ядро обхода готово; готовность передачи и туннеля показана отдельно.';
+      return 'Ядро обхода готово; готовность передачи и перехвата показана отдельно.';
     }
 
     return switch (snapshot.state) {
       ProxyRuntimeState.idle => null,
       ProxyRuntimeState.starting => 'Запускаем сервисы.',
-      ProxyRuntimeState.running => 'Сервис активен.',
+      ProxyRuntimeState.running => 'Запуск сервиса не завершен.',
       ProxyRuntimeState.stopping => 'Останавливаем сервисы.',
       ProxyRuntimeState.failed => 'Сервис сообщил сбой.',
     };

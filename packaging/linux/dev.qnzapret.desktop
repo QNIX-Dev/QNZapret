@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=QNZapret
+Comment=Локальный клиент обхода региональных ограничений
+Exec=qnzapret
+Icon=dev.qnzapret
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true
+StartupWMClass=dev.qnzapret

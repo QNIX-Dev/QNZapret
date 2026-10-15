@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/app_theme.dart';
 import '../../../core/motion/app_motion.dart';
+import '../../../core/motion/app_smooth_scroll.dart';
 import '../../../core/state/runtime_controller.dart';
 import '../../../core/state/runtime_view_models.dart';
 import '../../../core/ui/components/staggered_reveal.dart';
@@ -28,7 +29,9 @@ class LogsScreen extends ConsumerStatefulWidget {
 }
 
 class _LogsScreenState extends ConsumerState<LogsScreen> {
-  final ScrollController _scrollController = ScrollController();
+  final AppScrollController _scrollController = AppScrollController(
+    debugLabel: 'terminal-logs',
+  );
   int _seenLogCount = 0;
 
   @override
@@ -52,10 +55,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
             ? constraints.maxHeight - (wide ? 300 : 340)
             : 540.0;
 
-        return SingleChildScrollView(
-          physics: const BouncingScrollPhysics(
-            parent: AlwaysScrollableScrollPhysics(),
-          ),
+        return AppSmoothSingleChildScrollView(
           child: ConstrainedBox(
             constraints: BoxConstraints(minHeight: constraints.maxHeight),
             child: Column(
@@ -128,8 +128,12 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
         return;
       }
 
+      final position = _scrollController.position;
+      final target = position is AppSmoothScrollPosition
+          ? position.contentMaxScrollExtent
+          : position.maxScrollExtent;
       _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
+        target,
         duration: AppMotionDurations.standard,
         curve: AppMotionCurves.decelerate,
       );
@@ -174,7 +178,7 @@ class _LogsHero extends StatelessWidget {
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: extras.glassSurface,
+        color: extras.mainGlassSurface,
         borderRadius: BorderRadius.circular(mobile ? AppRadii.md : AppRadii.lg),
         border: Border.all(color: extras.glassStroke),
       ),

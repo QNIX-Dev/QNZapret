@@ -1,6 +1,9 @@
-# Android Runtime Handoff
+# Android non-root runtime
 
-## Назначение
+Сверено с кодом ветки `quriee` 12 октября 2026 года. Это описание реализации,
+а не подтверждение полной готовности на текущем телефоне. Выполненные проверки
+и ограничения — в [отчёте обновления](android-update-2026-10-12.md).
+Критерии приёмки: [Android и подготовка тестирования](android_next_stage.md).
 
 Этот файл фиксирует состояние Android runtime после перехода на clean-room схему, взятую по архитектурной идее из ByeByeDPI, но без переноса GPL-кода Android-обвязки.
 
@@ -11,14 +14,10 @@
 Production Android path сейчас выглядит так:
 
 ```text
-Flutter UI
-  -> Dart ProxyRuntime contract
-  -> Android MethodChannel bridge
-  -> QnzapretVpnService
-  -> Android TUN fd
-  -> hev-socks5-tunnel
-  -> local strategy SOCKS5 proxy
-  -> protected TCP/UDP sockets
+Flutter -> Android MethodChannel -> QnzapretVpnService
+  -> TUN fd -> MIT hev-socks5-tunnel
+  -> local StrategySocks5Server 127.0.0.1:1080
+  -> protected TCP/UDP sockets -> реальная сеть
 ```
 
 Telegram compatibility mode работает параллельно основному VPN path:
@@ -34,13 +33,18 @@ Qnzapret Start
 
 Архитектурная идея совпадает с локальным VPN-redirect подходом ByeByeDPI: Android VPN используется не как удаленный VPN-сервер, а как no-root перехват трафика устройства с локальной обработкой.
 
-Важно по лицензиям:
+Дефолты: `establishTunnel=true`, MTU 8500, `poolSize=0`,
+`cloudflareEnabled=false`. Последний flag **не выключает** Kotlin Telegram
+proxy: service запускает его отдельным маршрутом. Linux defaults отличаются.
 
-- GPL-код Android-обвязки ByeByeDPI в проект не переносился.
-- Kotlin lifecycle, bridge, service, strategy proxy и стратегия написаны внутри QNZapret.
-- Сторонний TUN-to-SOCKS слой оставлен как `hev-socks5-tunnel`, потому что он распространяется под MIT.
+Собственный пакет исключён из VPN. Upstream sockets используют protect и,
+когда доступна подходящая сеть, selected-network bind перед connect.
+Underlying network выбирается как validated/unrestricted/non-VPN, с DNS из
+LinkProperties. IPv4 route добавляется всегда; IPv6 route — только при usable
+IPv6/default route. При отсутствии DNS есть hardcoded fallback; отсутствие
+IPv6 не должно держать долгие connect timeouts.
 
-## Что уже сделано
+## Стратегия
 
 - Дефолтный Android launch config поднимает TUN через `establishTunnel=true`.
 - Старый самописный `TunPacketForwarder.kt` удален из production path.
@@ -81,7 +85,10 @@ Qnzapret Start
 - `TelegramCloudflareResolver.kt` добавляет system/network DNS -> DoH -> UDP fallback, short timeout, 5-минутный cache и IPv4 preference на IPv4-only underlying-сети. При connect к resolved IP transport сохраняет TLS SNI и HTTP `Host` как исходный route host; `tlsVerify=false` разрешен только явно в локальном smoke config.
 - Controlled self-test оставлен как диагностический инструмент для проверки UID/app-network blocker без изменения Dart API.
 
-## Ключевые файлы
+`QuicHostCorrelation` использует UDP/53 DNS A/AAAA и prior TCP host hints;
+DoH/DoT/старый cache/multi-IP могут скрывать host. Поэтому дефолтный QUIC
+Initial rule не требует hostlist match. Общие lists/payloads берутся из
+`runtime/assets/qnzapret`, подключённого Gradle как `runtime/assets`.
 
 - `lib/core/backend/proxy_runtime.dart` - Dart runtime contract и default Android strategy config.
 - `lib/core/backend/proxy_runtime_controller.dart` - UI/application facade для start/stop/status.
@@ -144,7 +151,11 @@ QNZapretProxy: socks tcp connect ok target=... connectMs=...
 QNZapretProxy: strategy socks transport=... payloadBytes=... decisionMs=...
 ```
 
-Ожидаемые контрольные логи остановки:
+Service поднимает Kotlin proxy независимо от Python/Linux sidecar.
+MTProxy сохраняет signed DC/protocol marker, расшифровывает client stream и
+отправляет packet-aligned upstream frames. Есть route-provider, DNS fallback,
+scoring, cooldown, one-shot pool и media/upload watchdog.
+[Подробности маршрутизации](android_telegram_cloudflare_routes.md).
 
 ```text
 QNZapretBridge: stop requested
@@ -154,23 +165,44 @@ QNZapretTgCompat: telegram kotlin proxy stopped
 QNZapretProxy: socks5 strategy proxy stopped
 ```
 
-## Проверки
+Optional remote SOCKS5 relay через endpointPolicies остаётся отдельным
+диагностическим маршрутом, требующим внешнего узла. Он не является default
+Telegram setup. HTTPS CONNECT/production secret storage не реализованы.
 
-Последний известный зеленый набор:
+## Lifecycle и диагностика
 
-- `flutter analyze --no-pub` - passed
-- `flutter test --no-pub` - passed
-- `cd android; .\gradlew.bat :app:testDebugUnitTest` - passed
-- `cd android; .\gradlew.bat :app:assembleDebug` - passed
-- `adb install -r build\app\outputs\apk\debug\app-debug.apk` - success
+- Prepare вызывает `VpnService.prepare` и возвращает системный consent result.
+- Start отправляет foreground intent, service компилирует профиль, поднимает
+  local proxy/TUN/Telegram и обновляет in-memory store.
+- `trafficForwarderReady` требует TUN-to-SOCKS, `tunnelActive` — TUN fd.
+  `running` без этих flags не означает готовый перехват.
+- Stop/action/revoke/destroy закрывают TUN, JNI transport, proxy и Telegram.
+- Notification содержит Stop/Restart/Telegram setup; Android 13+ требует
+  `POST_NOTIFICATIONS`. Скорость не отображается без надёжных counters.
+- QS tile управляет тем же service; для старта берёт native default config.
+- EventChannel публикует snapshots/lifecycle logs. Detailed network logs
+  остаются в logcat.
+- Snapshot/QS render не вызывают VpnService.prepare; last-known consent
+  читается из preferences. Prepare/Start — только явные user actions.
+- Startup выполняется в lifecycle executor с generation cancellation;
+  native JNI health и ошибки не подменяются idle при onDestroy.
 
-Перед финальным merge/push после новых правок документации стоит повторить хотя бы:
+Контрольные теги: `QNZapretBridge`, `QNZapretService`, `QNZapretTun`,
+`QNZapretProxy`, `QNZapretNetTest`, `QNZapretTgCompat`.
+Self-test выполняется асинхронно после готовности (`runtime_ready`),
+не блокирует Start и UI; он проверяет plain,
+protected, selected-network-bound TCP и UDP DNS именно из UID приложения.
+Смотрите [сетевую диагностику](android_uid_network_blocker.md).
 
-- `flutter analyze --no-pub`
-- `flutter test --no-pub`
-- `cd android; .\gradlew.bat :app:testDebugUnitTest`
+## Проверено и что дальше
 
-## Что осталось
+Ранее в handoff были успешные device проверки consent, Start/TUN/local proxy,
+Stop и отдельный Pixel smoke. Их результаты относятся к прежнему окружению;
+серийный номер и UID устройства не нужны для воспроизведения на новом телефоне.
+12 октября собраны release APK/AAB и отдельный Preview APK для безопасной
+параллельной установки при несовместимости старой подписи. `-PqnzPreview=true`
+меняет только applicationId на `dev.qnzapret.preview` и подпись названия в меню/QS;
+Kotlin/JNI namespace остаётся `dev.qnzapret`, runtime и данные изолированы Android.
 
 Исторический UID/app-network blocker отдельно описан в `docs/android_uid_network_blocker.md`; сейчас это regression checklist, а не главная рабочая гипотеза.
 

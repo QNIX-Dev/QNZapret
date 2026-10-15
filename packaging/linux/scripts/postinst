@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+if command -v systemd-sysusers >/dev/null 2>&1; then
+  systemd-sysusers /usr/lib/sysusers.d/qnzapret.conf
+elif ! getent passwd qnzapret-runtime >/dev/null 2>&1; then
+  useradd --system --home-dir /var/lib/qnzapret \
+    --shell /usr/sbin/nologin --comment "QNZapret packet runtime" \
+    qnzapret-runtime
+fi
+
+if command -v systemd-tmpfiles >/dev/null 2>&1; then
+  systemd-tmpfiles --create /usr/lib/tmpfiles.d/qnzapret.conf
+fi
+systemctl daemon-reload
+if command -v loginctl >/dev/null 2>&1; then
+  loginctl list-users --no-legend 2>/dev/null |
+    while read -r uid user _rest; do
+      [ -n "${uid:-}" ] || continue
+      systemctl --user --machine="${user}@" daemon-reload \
+        >/dev/null 2>&1 || true
+    done
+fi

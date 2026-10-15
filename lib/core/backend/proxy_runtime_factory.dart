@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'android_proxy_runtime.dart';
+import 'linux_proxy_runtime.dart';
 import 'proxy_runtime.dart';
 
 ProxyRuntime createDefaultProxyRuntime({TargetPlatform? targetPlatform}) {
@@ -8,7 +9,7 @@ ProxyRuntime createDefaultProxyRuntime({TargetPlatform? targetPlatform}) {
 
   return switch (platform) {
     TargetPlatform.android => const AndroidProxyRuntime(),
-    TargetPlatform.linux => const StubProxyRuntime(ProxyPlatform.linux),
+    TargetPlatform.linux => const LinuxProxyRuntime(),
     TargetPlatform.windows => const StubProxyRuntime(ProxyPlatform.windows),
     TargetPlatform.fuchsia ||
     TargetPlatform.iOS ||

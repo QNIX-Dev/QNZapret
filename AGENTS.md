@@ -1,4 +1,4 @@
-# AGENTS.md
+# Работа в QNZapret
 
 Инструкции для агентов и разработчиков в репозитории QNZapret.
 
@@ -21,7 +21,7 @@ lib/core/state/       Riverpod state и view models
 lib/core/ui/          design tokens и общие компоненты
 lib/features/         экраны Home, Logs, Settings
 android/app/src/main/kotlin/dev/qnzapret/   Android runtime, VPN service, strategy proxy, Telegram mode
-android/app/src/main/jni/                   NDK-сборка; hev-socks5-tunnel - git submodule (MIT, закреплен на 2.14.4)
+android/app/src/main/jni/                   NDK-сборка; hev-socks5-tunnel - git submodule (MIT, закреплен на 2.19.0)
 android/app/src/main/assets/qnzapret/       hostlists и strategy payloads
 docs/                 архитектура, runtime contracts, handoff
 test/                 Dart-тесты; Kotlin JVM-тесты лежат в android/app/src/test

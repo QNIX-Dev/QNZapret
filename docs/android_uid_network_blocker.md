@@ -1,6 +1,8 @@
-# Android UID Network Blocker
+# Android: диагностика сети из UID приложения
 
-## Коротко
+Сверено с Android self-test и proxy diagnostics в ветке `quriee` 12 октября 2026.
+Имя файла сохранено для ссылок: прежний UID-blocker — исторический симптом,
+а не установленная причина любой сегодняшней ошибки Telegram/YouTube.
 
 После перехода на схему `VpnService -> TUN fd -> hev-socks5-tunnel -> local strategy SOCKS5 proxy -> protected sockets` VPN path поднимается и трафик доходит до нашего local strategy proxy.
 
@@ -21,30 +23,53 @@
 Типовой лог:
 
 ```text
-QNZapretProxy: socks tcp connect failed target=... error=SocketTimeoutException: failed to connect ...
+TUN -> hev-socks5-tunnel -> локальный SOCKS5 -> protected upstream -> protocol/DPI
 ```
 
-## Что проверено
+В ранних проверках TUN и SOCKS5 работали, но protected TCP connect из UID
+приложения уходил в timeout. Успех `adb shell` тогда не доказывал доступность
+сети из UID приложения. Более поздний Pixel smoke показывал работающий
+protected/bound connect; текущий телефон нужно проверить заново.
 
-Проверки показали разницу между обычным `adb shell` и UID приложения.
+## Порядок проверки
 
-Из UID приложения `10416` соединения не проходят:
+1. Получить `QNZapretNetTest` на стадии `runtime_ready` (асинхронно после старта); для A/B отдельно
+   зафиксировать доступность без VPN и с ним.
+2. Сравнить plain TCP, protected socket, selected-network socket factory,
+   protect+bind+connect и protected/bound UDP DNS.
+3. Проверить выбранную сеть, INTERNET/validation/unrestricted/non-VPN,
+   DNS/Private DNS, IPv6 address/default route.
+4. Если self-test падает, проверить netpolicy/data saver/background/battery,
+   always-on/lockdown VPN и права manifest. Не переписывать стратегию до
+   выяснения, может ли сам процесс открыть обычное исходящее соединение.
+5. Если connect успешен, разбирать TCP first payload/upstream byte, UDP/QUIC,
+   TLS, Telegram route/handshake и protocol-specific failures.
 
-```powershell
-adb shell run-as dev.qnzapret /system/bin/nc -z -w 3 192.168.1.1 80
-adb shell run-as dev.qnzapret /system/bin/nc -z -w 3 172.67.199.162 443
+```bash
+adb devices -l
+adb -s <DEVICE_ID> logcat -d -s QNZapretNetTest QNZapretProxy QNZapretTun
+adb -s <DEVICE_ID> shell dumpsys connectivity
+adb -s <DEVICE_ID> shell dumpsys netpolicy
 ```
 
-Обе проверки уходили в timeout.
+Вывод может содержать сетевые/персональные сведения: не публиковать его целиком.
+Не сбрасывать данные приложения, сеть или аккаунты автоматически.
 
-Из обычного `adb shell` те же сетевые направления доступны:
+`run-as dev.qnzapret` работает только для debuggable сборки; release APK с debug
+подписью от этого не становится debuggable. UID определять для текущей установки,
+а не использовать старый числовой UID. Не предполагать, что роутер находится
+по 192.168.1.1 или содержит открытый порт 80.
 
-```powershell
-adb shell /system/bin/nc -z -w 3 192.168.1.1 80
-adb shell /system/bin/nc -z -w 3 172.67.199.162 443
-```
+## Что логирует runtime
 
-Права и базовые Android-флаги при этом выглядят корректно:
+- `socks tcp connect start/ok/failed`, endpointClass, network, connectMs.
+- `socks tcp first payload`, strategy decision и `upstream first byte`.
+- `socks udp send/receive`, RTT, MTU, throughput и DNS host correlation.
+- `telegram preconnect ... directBlockedBeforePayload=true`: отказ до L7,
+  fake/split ещё не могли помочь.
+- `telegram relay ...`: отдельный configured remote relay path.
+- `QNZapretTgCompat`: local handshake, DNS/TCP/TLS/WS HTTP 101,
+  route/cooldown/pool, bytesUp/Down, watchdog close reasons.
 
 - `INTERNET` выдан;
 - `ACCESS_NETWORK_STATE` выдан;

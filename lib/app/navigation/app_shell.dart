@@ -87,6 +87,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                             _SharedAxisPage(
                               controller: _pageController,
                               index: AppDestination.home.index,
+                              active: _activeDestination == AppDestination.home,
                               child: HomeScreen(
                                 onOpenSettings: () => _openSettings(context),
                                 bottomInset: navClearance,
@@ -95,6 +96,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                             _SharedAxisPage(
                               controller: _pageController,
                               index: AppDestination.logs.index,
+                              active: _activeDestination == AppDestination.logs,
                               child: LogsScreen(
                                 onOpenSettings: () => _openSettings(context),
                                 bottomInset: navClearance,
@@ -235,38 +237,44 @@ class _SharedAxisPage extends StatelessWidget {
   const _SharedAxisPage({
     required this.controller,
     required this.index,
+    required this.active,
     required this.child,
   });
 
   final PageController controller;
   final int index;
+  final bool active;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: controller,
-      child: child,
-      builder: (context, child) {
-        var page = index.toDouble();
-        if (controller.hasClients && controller.position.hasContentDimensions) {
-          page = controller.page ?? page;
-        }
+    return TickerMode(
+      enabled: active,
+      child: AnimatedBuilder(
+        animation: controller,
+        child: child,
+        builder: (context, child) {
+          var page = index.toDouble();
+          if (controller.hasClients &&
+              controller.position.hasContentDimensions) {
+            page = controller.page ?? page;
+          }
 
-        final distance = (page - index).clamp(-1.0, 1.0);
-        final t = distance.abs();
-        final opacity = (1 - t * 0.12).clamp(0.0, 1.0);
-        final scale = 1 - t * 0.012;
+          final distance = (page - index).clamp(-1.0, 1.0);
+          final t = distance.abs();
+          final opacity = (1 - t * 0.12).clamp(0.0, 1.0);
+          final scale = 1 - t * 0.012;
 
-        return Opacity(
-          opacity: opacity,
-          child: Transform.scale(
-            scale: scale,
-            alignment: Alignment.center,
-            child: child,
-          ),
-        );
-      },
+          return Opacity(
+            opacity: opacity,
+            child: Transform.scale(
+              scale: scale,
+              alignment: Alignment.center,
+              child: child,
+            ),
+          );
+        },
+      ),
     );
   }
 }

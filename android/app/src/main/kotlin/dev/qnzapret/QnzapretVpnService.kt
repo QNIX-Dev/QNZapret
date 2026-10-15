@@ -8,9 +8,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.net.VpnService
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicInteger
 
 class QnzapretVpnService : VpnService() {
     private var runtime: QnzapretAndroidRuntime? = null
@@ -30,6 +35,7 @@ class QnzapretVpnService : VpnService() {
         }
 
         if (intent?.action == ACTION_STOP) {
+            operationGeneration.incrementAndGet()
             Log.d(LOG_TAG, "stop action received")
             ensureNotificationChannel()
             QnzapretVpnRuntimeStore.markStopping("Останавливаем сервис обхода.")
@@ -40,6 +46,7 @@ class QnzapretVpnService : VpnService() {
         }
 
         if (VpnService.prepare(this) != null) {
+            VpnConsentStore.record(this, false)
             QnzapretVpnRuntimeStore.markFailed(
                 "Нет VPN-разрешения. Перед запуском нужно подготовить сервис.",
             )
@@ -122,12 +129,25 @@ class QnzapretVpnService : VpnService() {
             if (startResult.plan.requiredBlobKeys.isNotEmpty()) {
                 append(" Payload-файлы: ${startResult.plan.requiredBlobKeys.sorted().joinToString()}.")
             }
-            if (startResult.assetReport.isComplete) {
-                append(" Данные проверены: ${startResult.assetReport.presentCount}.")
-            } else {
-                append(
-                    " Не найдены данные: ${startResult.assetReport.missingPaths.sorted().joinToString()}.",
+            val startResult = try {
+                synchronized(runtimeLock) {
+                    if (generation != operationGeneration.get()) return@execute
+                    QnzapretAndroidRuntime(this).also { runtime = it }.start(config)
+                }
+            } catch (error: Exception) {
+                if (generation != operationGeneration.get()) return@execute
+                Log.d(
+                    LOG_TAG,
+                    "runtime start failed ${error.javaClass.simpleName}:${error.message ?: "-"}",
                 )
+                runtime?.stop()
+                runtime = null
+                QnzapretVpnRuntimeStore.markFailed(
+                    "Не удалось запустить сервис обхода: ${error.message ?: error.javaClass.simpleName}.",
+                )
+                updateNotification(NotificationState.ERROR, config, telegramCompatibilityProxy?.currentState())
+                stopSelf()
+                return@execute
             }
             append(" ${startResult.tunState.message}")
             append(" Telegram proxy: ${telegramState.message}")
@@ -157,17 +177,25 @@ class QnzapretVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        operationGeneration.incrementAndGet()
+        lifecycleExecutor.shutdownNow()
+        diagnosticsExecutor.shutdownNow()
         stopRuntime("Сервис обхода остановлен. Система готова к следующему запуску.")
         super.onDestroy()
     }
 
     override fun onRevoke() {
+        operationGeneration.incrementAndGet()
+        VpnConsentStore.record(this, false)
         stopRuntime("Система отозвала VPN-разрешение. Перед новым запуском нужно разрешить VPN снова.")
         stopSelf()
         super.onRevoke()
     }
 
-    private fun stopRuntime(message: String) {
+    private fun stopRuntime(message: String) = synchronized(runtimeLock) {
+        healthHandler.removeCallbacks(healthCheck)
+        diagnosticTask?.cancel(true)
+        val failed = QnzapretVpnRuntimeStore.snapshot(this)["state"] == "failed"
         runtime?.stop()
         runtime = null
         lastProxyEndpoint = null

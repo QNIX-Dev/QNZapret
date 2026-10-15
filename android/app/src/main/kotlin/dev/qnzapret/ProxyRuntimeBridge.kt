@@ -4,16 +4,19 @@ import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
 
 class ProxyRuntimeBridge(
     private val activity: FlutterActivity,
     flutterEngine: FlutterEngine,
-) : MethodChannel.MethodCallHandler {
+) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
     private val context = activity.applicationContext
     private val channel = MethodChannel(
         flutterEngine.dartExecutor.binaryMessenger,
@@ -21,9 +24,49 @@ class ProxyRuntimeBridge(
     )
 
     private var pendingPrepareResult: MethodChannel.Result? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val eventChannel = EventChannel(flutterEngine.dartExecutor.binaryMessenger,
+        "dev.qnzapret/proxy_runtime/events")
+    private var eventSink: EventChannel.EventSink? = null
+    private var lastEventState: String? = null
+    private val snapshotListener: (Map<String, Any>) -> Unit = { snapshot ->
+        mainHandler.post {
+            val sink = eventSink
+            if (sink != null) {
+                sink.success(mapOf("type" to "snapshot", "snapshot" to snapshot))
+                val state = snapshot["state"] as? String ?: "idle"
+                if (state != lastEventState) {
+                    sink.success(mapOf("type" to "log", "log" to mapOf(
+                        "timestampMillis" to System.currentTimeMillis(),
+                        "level" to if (state == "failed") "error" else "info",
+                        "source" to "android-runtime", "code" to "android_state_$state",
+                        "message" to (snapshot["message"] ?: state))))
+                    lastEventState = state
+                }
+            }
+        }
+    }
 
     init {
         channel.setMethodCallHandler(this)
+        eventChannel.setStreamHandler(this)
+    }
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+        eventSink = events
+        lastEventState = null
+        QnzapretVpnRuntimeStore.addListener(context, snapshotListener)
+    }
+
+    override fun onCancel(arguments: Any?) {
+        eventSink = null
+        QnzapretVpnRuntimeStore.removeListener(snapshotListener)
+    }
+
+    fun dispose() {
+        onCancel(null)
+        eventChannel.setStreamHandler(null)
+        channel.setMethodCallHandler(null)
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -32,6 +75,19 @@ class ProxyRuntimeBridge(
             "getSnapshot" -> result.success(QnzapretVpnRuntimeStore.snapshot(context))
             "start" -> handleStart(call, result)
             "stop" -> handleStop(result)
+            "setupTelegram" -> {
+                val setupIntent = TelegramCompatibilityProxyManager.currentSetupIntent(context)
+                if (setupIntent == null) {
+                    result.error("android_telegram_unavailable", "Сначала запустите сервисы.", null)
+                } else {
+                    try {
+                        activity.startActivity(setupIntent)
+                        result.success(null)
+                    } catch (_: Exception) {
+                        result.error("android_telegram_setup_failed", "Не удалось открыть настройку Telegram.", null)
+                    }
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -83,6 +139,7 @@ class ProxyRuntimeBridge(
 
     private fun handleStart(call: MethodCall, result: MethodChannel.Result) {
         if (VpnService.prepare(context) != null) {
+            VpnConsentStore.record(context, false)
             result.error(
                 "vpn_permission_required",
                 "Перед запуском нужно разрешить VPN-подключение.",
@@ -91,6 +148,7 @@ class ProxyRuntimeBridge(
             return
         }
 
+        VpnConsentStore.record(context, true)
         val rawConfig = call.argument<Map<String, Any?>>("config") ?: emptyMap()
         val config = VpnRuntimeConfig(
             localHost = rawConfig["localHost"] as? String ?: "127.0.0.1",
