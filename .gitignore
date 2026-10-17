@@ -47,3 +47,5 @@ app.*.map.json
 # Local research and backend reference sources
 /.sources/
 .codex
+# Widget Preview related
+.widget_preview/

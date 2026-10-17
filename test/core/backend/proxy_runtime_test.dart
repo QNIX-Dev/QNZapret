@@ -156,6 +156,8 @@ void main() {
     expect(snapshot.ipv6UdpForwarderReady, isTrue);
     expect(snapshot.tcpForwarderReady, isFalse);
     expect(snapshot.activeProfileName, 'Default lightweight');
+    expect(snapshot.telegramSidecarState, TelegramSidecarState.running);
+    expect(snapshot.degraded, isFalse);
     expect(snapshot.telegramCompatibilityProxyReady, isTrue);
     expect(snapshot.telegramCompatibilitySetupRequired, isTrue);
     expect(snapshot.telegramCompatibilityProxyEndpoint, '127.0.0.1:1443');

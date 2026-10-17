@@ -523,6 +523,17 @@ class ProxyRuntimeSnapshot {
     required this.ipv6UdpForwarderReady,
     required this.tcpForwarderReady,
     this.activeProfileName,
+    this.trafficInterceptionMode = TrafficInterceptionMode.none,
+    this.trafficInterceptionActive = false,
+    this.queueRegistered = false,
+    this.nftRulesInstalled = false,
+    this.interceptionReady = false,
+    this.backendVersion,
+    this.runtimeOwnerUid,
+    this.telegramSidecarState = TelegramSidecarState.unavailable,
+    this.degraded = false,
+    this.partialFailureCode,
+    this.partialFailureMessage,
     this.telegramCompatibilityProxyReady = false,
     this.telegramCompatibilitySetupRequired = false,
     this.telegramCompatibilityProxyEndpoint,
@@ -549,6 +560,12 @@ class ProxyRuntimeSnapshot {
   final bool ipv6UdpForwarderReady;
   final bool tcpForwarderReady;
   final String? activeProfileName;
+  final String? backendVersion;
+  final int? runtimeOwnerUid;
+  final TelegramSidecarState telegramSidecarState;
+  final bool degraded;
+  final String? partialFailureCode;
+  final String? partialFailureMessage;
   final bool telegramCompatibilityProxyReady;
   final bool telegramCompatibilitySetupRequired;
   final String? telegramCompatibilityProxyEndpoint;
@@ -575,6 +592,8 @@ class ProxyRuntimeSnapshot {
       ipv6PacketCodecReady: false,
       ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
+      telegramSidecarState: TelegramSidecarState.unavailable,
+      degraded: false,
       telegramCompatibilityProxyReady: false,
       telegramCompatibilitySetupRequired: false,
     );
@@ -587,6 +606,42 @@ class ProxyRuntimeSnapshot {
     final telegramEndpoint =
         map['telegramCompatibilityProxyEndpoint'] as String?;
     final telegramMessage = map['telegramCompatibilityProxyMessage'] as String?;
+    final legacyTunnelActive = map['tunnelActive'] as bool? ?? false;
+    final strategyEngineReady = map['strategyEngineReady'] as bool? ?? false;
+    final trafficForwarderReady =
+        map['trafficForwarderReady'] as bool? ?? false;
+    final interceptionMode = _parseTrafficInterceptionMode(
+      map['trafficInterceptionMode'] as String?,
+      legacyTunnelActive: legacyTunnelActive,
+    );
+    final interceptionActive =
+        map['trafficInterceptionActive'] as bool? ?? legacyTunnelActive;
+    final queueRegistered =
+        map['queueRegistered'] as bool? ??
+        (platform == ProxyPlatform.linux && strategyEngineReady);
+    final nftRulesInstalled =
+        map['nftRulesInstalled'] as bool? ??
+        (platform == ProxyPlatform.linux && trafficForwarderReady);
+    final interceptionReady =
+        map['interceptionReady'] as bool? ??
+        (interceptionActive &&
+            trafficForwarderReady &&
+            (platform != ProxyPlatform.linux ||
+                (queueRegistered && nftRulesInstalled)));
+    final telegramProxyReady =
+        map['telegramCompatibilityProxyReady'] as bool? ?? false;
+    final telegramSidecarState = _parseTelegramSidecarState(
+      map['telegramSidecarState'] as String?,
+      runtimeState: state,
+      legacyProxyReady: telegramProxyReady,
+    );
+    final partialFailureCode = _nonEmptyString(map['partialFailureCode']);
+    final partialFailureMessage = _nonEmptyString(map['partialFailureMessage']);
+    final degraded =
+        (map['degraded'] as bool? ?? false) ||
+        partialFailureCode != null ||
+        partialFailureMessage != null ||
+        telegramSidecarState == TelegramSidecarState.failed;
     return ProxyRuntimeSnapshot(
       platform: platform,
       state: state,
@@ -610,8 +665,16 @@ class ProxyRuntimeSnapshot {
       activeProfileName: (activeProfileName?.isEmpty ?? true)
           ? null
           : activeProfileName,
-      telegramCompatibilityProxyReady:
-          map['telegramCompatibilityProxyReady'] as bool? ?? false,
+      backendVersion: switch (map['backendVersion'] as String?) {
+        final value? when value.isNotEmpty => value,
+        _ => null,
+      },
+      runtimeOwnerUid: (map['runtimeOwnerUid'] as num?)?.toInt(),
+      telegramSidecarState: telegramSidecarState,
+      degraded: degraded,
+      partialFailureCode: partialFailureCode,
+      partialFailureMessage: partialFailureMessage,
+      telegramCompatibilityProxyReady: telegramProxyReady,
       telegramCompatibilitySetupRequired:
           map['telegramCompatibilitySetupRequired'] as bool? ?? false,
       telegramCompatibilityProxyEndpoint: (telegramEndpoint?.isEmpty ?? true)
@@ -644,6 +707,13 @@ class ProxyRuntimeSnapshot {
     bool? ipv6UdpForwarderReady,
     bool? tcpForwarderReady,
     String? activeProfileName,
+    String? backendVersion,
+    int? runtimeOwnerUid,
+    TelegramSidecarState? telegramSidecarState,
+    bool? degraded,
+    String? partialFailureCode,
+    String? partialFailureMessage,
+    bool clearPartialFailure = false,
     bool? telegramCompatibilityProxyReady,
     bool? telegramCompatibilitySetupRequired,
     String? telegramCompatibilityProxyEndpoint,
@@ -674,6 +744,16 @@ class ProxyRuntimeSnapshot {
           ipv6UdpForwarderReady ?? this.ipv6UdpForwarderReady,
       tcpForwarderReady: tcpForwarderReady ?? this.tcpForwarderReady,
       activeProfileName: activeProfileName ?? this.activeProfileName,
+      backendVersion: backendVersion ?? this.backendVersion,
+      runtimeOwnerUid: runtimeOwnerUid ?? this.runtimeOwnerUid,
+      telegramSidecarState: telegramSidecarState ?? this.telegramSidecarState,
+      degraded: degraded ?? this.degraded,
+      partialFailureCode: clearPartialFailure
+          ? null
+          : partialFailureCode ?? this.partialFailureCode,
+      partialFailureMessage: clearPartialFailure
+          ? null
+          : partialFailureMessage ?? this.partialFailureMessage,
       telegramCompatibilityProxyReady:
           telegramCompatibilityProxyReady ??
           this.telegramCompatibilityProxyReady,
@@ -747,6 +827,8 @@ final class StubProxyRuntime implements ProxyRuntime {
       ipv6PacketCodecReady: false,
       ipv6UdpForwarderReady: false,
       tcpForwarderReady: false,
+      telegramSidecarState: TelegramSidecarState.unavailable,
+      degraded: false,
       telegramCompatibilityProxyReady: false,
       telegramCompatibilitySetupRequired: false,
     );
