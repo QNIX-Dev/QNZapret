@@ -26,6 +26,8 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Trust installed Flutter SDK
+        run: git config --global --add safe.directory "$FLUTTER_ROOT"
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
