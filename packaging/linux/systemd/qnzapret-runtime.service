@@ -1,6 +1,6 @@
 [Unit]
 Description=QNZapret privileged NFQUEUE runtime
-Documentation=file:///usr/share/doc/qnzapret/linux_runtime_handoff.md
+Documentation=file:///usr/share/doc/qnzapret/linux.md
 After=dbus.service network.target
 
 [Service]

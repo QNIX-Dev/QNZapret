@@ -22,11 +22,11 @@ commit `307a384ab7f522e34bb1a045884d0bd90f40bee5`.
 Upstream Python-файлы не изменены; upstream GUI/tray/updater не поставляются.
 Отдельный `linux/components/qnzapret_telegram.py` читает secret-file,
 маскирует secret/setup URI и наблюдает health WS/H2 bridges.
-Автообновления Linux описаны в `docs/linux_component_updates.md` основного проекта.
+Автообновления Linux описаны в `docs/linux.md` основного проекта.
 
 ## Android TUN-to-SOCKS
 
-Android NDK собирает vendored MIT `hev-socks5-tunnel` из
+Android NDK собирает MIT `hev-socks5-tunnel`, подключённый как git submodule в
 `android/app/src/main/jni/hev-socks5-tunnel/`; его лицензия и лицензии вложенных
 зависимостей находятся рядом с исходниками. Kotlin lifecycle/strategy/MTProxy
 являются кодом QNZapret; GPL Android-обвязка reference fork не подключена.

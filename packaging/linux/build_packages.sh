@@ -53,12 +53,10 @@ install -Dm0644 "$repo_dir/packaging/linux/dev.qnzapret.metainfo.xml" \
   "$stage_dir/usr/share/metainfo/dev.qnzapret.metainfo.xml"
 install -Dm0644 "$repo_dir/linux/runner/resources/app_icon.png" \
   "$stage_dir/usr/share/icons/hicolor/256x256/apps/dev.qnzapret.png"
-install -Dm0644 "$repo_dir/docs/linux_runtime_handoff.md" \
-  "$stage_dir/usr/share/doc/qnzapret/linux_runtime_handoff.md"
-install -Dm0644 "$repo_dir/docs/linux_packaging.md" \
-  "$stage_dir/usr/share/doc/qnzapret/linux_packaging.md"
-install -Dm0644 "$repo_dir/docs/linux_component_updates.md" \
-  "$stage_dir/usr/share/doc/qnzapret/linux_component_updates.md"
+for document in "$repo_dir"/docs/*.md; do
+  install -Dm0644 "$document" \
+    "$stage_dir/usr/share/doc/qnzapret/$(basename "$document")"
+done
 install -Dm0644 \
   "$repo_dir/runtime/assets/qnzapret/THIRD_PARTY_NOTICES.md" \
   "$stage_dir/usr/share/doc/qnzapret/THIRD_PARTY_NOTICES.md"
