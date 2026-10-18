@@ -21,7 +21,8 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
             ca-certificates clang cmake curl git jq libgtk-3-dev liblzma-dev lld llvm \
-            ninja-build pkg-config python3 unzip xz-utils
+            ninja-build pkg-config python3 python3-certifi python3-cryptography \
+            python3-h2 python3-httpx unzip xz-utils
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -33,10 +34,12 @@ jobs:
       - run: flutter test
       - run: flutter build linux --release
       - run: ctest --test-dir build/linux/x64/release --output-on-failure
+      - name: Archive bundle with executable permissions
+        run: tar -C build/linux/x64/release -czf build/linux/x64/release/debian12-linux-bundle.tar.gz bundle
       - uses: actions/upload-artifact@v4
         with:
           name: debian12-linux-bundle
-          path: build/linux/x64/release/bundle
+          path: build/linux/x64/release/debian12-linux-bundle.tar.gz
 
   fedora-package:
     runs-on: ubuntu-latest
@@ -47,10 +50,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: debian12-linux-bundle
-          path: build/linux/x64/release/bundle
+          path: build/linux/x64/release
       - run: dnf install -y bash rpm-build rpmdevtools tar xz
       - name: Package smoke
         run: |
+          tar -xzf build/linux/x64/release/debian12-linux-bundle.tar.gz -C build/linux/x64/release
           test -x build/linux/x64/release/bundle/qnzapret
           bash packaging/linux/build_packages.sh
           rpm -qpl build/linux/packages/*.rpm
